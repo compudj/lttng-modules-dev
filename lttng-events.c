@@ -2050,6 +2050,7 @@ int _lttng_field_statedump(struct lttng_session *session,
 		ret = _lttng_enum_statedump(session, field, nesting);
 		break;
 	case atype_array:
+	case atype_array_bitfield:
 	{
 		const struct lttng_basic_type *elem_type;
 
@@ -2088,6 +2089,7 @@ int _lttng_field_statedump(struct lttng_session *session,
 		break;
 	}
 	case atype_sequence:
+	case atype_sequence_bitfield:
 	{
 		const struct lttng_basic_type *elem_type;
 		const struct lttng_basic_type *length_type;
