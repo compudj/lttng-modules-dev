@@ -176,6 +176,22 @@ struct lttng_kernel_filter_bytecode {
 	char data[0];
 } __attribute__((packed));
 
+enum lttng_kernel_tracker_type {
+	LTTNG_KERNEL_TRACKER_UNKNOWN		= -1,
+
+	LTTNG_KERNEL_TRACKER_PID		= 0,
+	LTTNG_KERNEL_TRACKER_VPID		= 1,
+	LTTNG_KERNEL_TRACKER_UID		= 2,
+	LTTNG_KERNEL_TRACKER_VUID		= 3,
+	LTTNG_KERNEL_TRACKER_GID		= 4,
+	LTTNG_KERNEL_TRACKER_VGID		= 5,
+};
+
+struct lttng_kernel_tracker_args {
+	enum lttng_kernel_tracker_type type;
+	int32_t id;
+};
+
 /* LTTng file descriptor ioctl */
 #define LTTNG_KERNEL_SESSION			_IO(0xF6, 0x45)
 #define LTTNG_KERNEL_TRACER_VERSION		\
@@ -199,6 +215,7 @@ struct lttng_kernel_filter_bytecode {
 	_IOR(0xF6, 0x58, int32_t)
 #define LTTNG_KERNEL_SESSION_UNTRACK_PID	\
 	_IOR(0xF6, 0x59, int32_t)
+
 /*
  * ioctl 0x58 and 0x59 are duplicated here. It works, since _IOR vs _IO
  * are generating two different ioctl numbers, but this was not done on
@@ -208,6 +225,12 @@ struct lttng_kernel_filter_bytecode {
 #define LTTNG_KERNEL_SESSION_METADATA_REGEN	_IO(0xF6, 0x59)
 /* 0x5A and 0x5B are reserved for a future ABI-breaking cleanup. */
 #define LTTNG_KERNEL_SESSION_STATEDUMP		_IO(0xF6, 0x5C)
+#define LTTNG_KERNEL_SESSION_LIST_TRACKER_IDS	\
+	_IOR(0xF6, 0x5D, struct lttng_kernel_tracker_args)
+#define LTTNG_KERNEL_SESSION_TRACK_ID		\
+	_IOR(0xF6, 0x5E, struct lttng_kernel_tracker_args)
+#define LTTNG_KERNEL_SESSION_UNTRACK_ID		\
+	_IOR(0xF6, 0x5F, struct lttng_kernel_tracker_args)
 
 /* Channel FD ioctl */
 #define LTTNG_KERNEL_STREAM			_IO(0xF6, 0x62)

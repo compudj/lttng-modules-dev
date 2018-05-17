@@ -43,62 +43,83 @@
  * sessions_mutex across calls to create, destroy, add, and del
  * functions of this API.
  */
-int lttng_pid_tracker_get_node_pid(const struct lttng_pid_hash_node *node)
+int lttng_id_tracker_get_node_id(const struct lttng_id_hash_node *node)
 {
-	return node->pid;
+	return node->id;
 }
 
 /*
  * Lookup performed from RCU read-side critical section (RCU sched),
  * protected by preemption off at the tracepoint call site.
- * Return 1 if found, 0 if not found.
+ * Return true if found, false if not found.
  */
-bool lttng_pid_tracker_lookup(struct lttng_pid_tracker *lpf, int pid)
+bool lttng_id_tracker_lookup(struct lttng_id_tracker_rcu *p, int id)
 {
 	struct hlist_head *head;
-	struct lttng_pid_hash_node *e;
-	uint32_t hash = hash_32(pid, 32);
+	struct lttng_id_hash_node *e;
+	uint32_t hash = hash_32(id, 32);
 
-	head = &lpf->pid_hash[hash & (LTTNG_PID_TABLE_SIZE - 1)];
+	head = &p->id_hash[hash & (LTTNG_ID_TABLE_SIZE - 1)];
 	lttng_hlist_for_each_entry_rcu(e, head, hlist) {
-		if (pid == e->pid)
-			return 1;	/* Found */
+		if (id == e->id)
+			return true;	/* Found */
 	}
-	return 0;
+	return false;
 }
-EXPORT_SYMBOL_GPL(lttng_pid_tracker_lookup);
+EXPORT_SYMBOL_GPL(lttng_id_tracker_lookup);
+
+static struct lttng_id_tracker_rcu *lttng_id_tracker_rcu_create(void)
+{
+	struct lttng_id_tracker_rcu *tracker;
+
+	tracker = kzalloc(sizeof(struct lttng_id_tracker_rcu), GFP_KERNEL);
+	if (!tracker)
+		return NULL;
+	return tracker;
+}
 
 /*
  * Tracker add and del operations support concurrent RCU lookups.
  */
-int lttng_pid_tracker_add(struct lttng_pid_tracker *lpf, int pid)
+int lttng_id_tracker_add(struct lttng_id_tracker *lf, int id)
 {
 	struct hlist_head *head;
-	struct lttng_pid_hash_node *e;
-	uint32_t hash = hash_32(pid, 32);
+	struct lttng_id_hash_node *e;
+	struct lttng_id_tracker_rcu *p = lf->p;
+	uint32_t hash = hash_32(id, 32);
+	bool allocated = false;
 
-	head = &lpf->pid_hash[hash & (LTTNG_PID_TABLE_SIZE - 1)];
+	if (!p) {
+		p = lttng_id_tracker_rcu_create();
+		if (!p)
+			return -ENOMEM;
+		allocated = true;
+	}
+	head = &p->id_hash[hash & (LTTNG_ID_TABLE_SIZE - 1)];
 	lttng_hlist_for_each_entry(e, head, hlist) {
-		if (pid == e->pid)
+		if (id == e->id)
 			return -EEXIST;
 	}
-	e = kmalloc(sizeof(struct lttng_pid_hash_node), GFP_KERNEL);
+	e = kmalloc(sizeof(struct lttng_id_hash_node), GFP_KERNEL);
 	if (!e)
 		return -ENOMEM;
-	e->pid = pid;
+	e->id = id;
 	hlist_add_head_rcu(&e->hlist, head);
+	if (allocated) {
+		rcu_assign_pointer(lf->p, p);
+	}
 	return 0;
 }
 
 static
-void pid_tracker_del_node_rcu(struct lttng_pid_hash_node *e)
+void id_tracker_del_node_rcu(struct lttng_id_hash_node *e)
 {
 	hlist_del_rcu(&e->hlist);
 	/*
 	 * We choose to use a heavyweight synchronize on removal here,
-	 * since removal of a PID from the tracker mask is a rare
+	 * since removal of an ID from the tracker mask is a rare
 	 * operation, and we don't want to use more cache lines than
-	 * what we really need when doing the PID lookups, so we don't
+	 * what we really need when doing the ID lookups, so we don't
 	 * want to afford adding a rcu_head field to those pid hash
 	 * node.
 	 */
@@ -111,48 +132,74 @@ void pid_tracker_del_node_rcu(struct lttng_pid_hash_node *e)
  * concurrent RCU lookups.
  */
 static
-void pid_tracker_del_node(struct lttng_pid_hash_node *e)
+void id_tracker_del_node(struct lttng_id_hash_node *e)
 {
 	hlist_del(&e->hlist);
 	kfree(e);
 }
 
-int lttng_pid_tracker_del(struct lttng_pid_tracker *lpf, int pid)
+int lttng_id_tracker_del(struct lttng_id_tracker *lf, int id)
 {
 	struct hlist_head *head;
-	struct lttng_pid_hash_node *e;
-	uint32_t hash = hash_32(pid, 32);
+	struct lttng_id_hash_node *e;
+	struct lttng_id_tracker_rcu *p = lf->p;
+	uint32_t hash = hash_32(id, 32);
 
-	head = &lpf->pid_hash[hash & (LTTNG_PID_TABLE_SIZE - 1)];
+	if (!p)
+		return -ENOENT;
+	head = &p->id_hash[hash & (LTTNG_ID_TABLE_SIZE - 1)];
 	/*
 	 * No need of _safe iteration, because we stop traversal as soon
 	 * as we remove the entry.
 	 */
 	lttng_hlist_for_each_entry(e, head, hlist) {
-		if (pid == e->pid) {
-			pid_tracker_del_node_rcu(e);
+		if (id == e->id) {
+			id_tracker_del_node_rcu(e);
 			return 0;
 		}
 	}
 	return -ENOENT;	/* Not found */
 }
 
-struct lttng_pid_tracker *lttng_pid_tracker_create(void)
-{
-	return kzalloc(sizeof(struct lttng_pid_tracker), GFP_KERNEL);
-}
-
-void lttng_pid_tracker_destroy(struct lttng_pid_tracker *lpf)
+static void lttng_id_tracker_rcu_destroy(struct lttng_id_tracker_rcu *p)
 {
 	int i;
 
-	for (i = 0; i < LTTNG_PID_TABLE_SIZE; i++) {
-		struct hlist_head *head = &lpf->pid_hash[i];
-		struct lttng_pid_hash_node *e;
+	if (!p)
+		return;
+	for (i = 0; i < LTTNG_ID_TABLE_SIZE; i++) {
+		struct hlist_head *head = &p->id_hash[i];
+		struct lttng_id_hash_node *e;
 		struct hlist_node *tmp;
 
 		lttng_hlist_for_each_entry_safe(e, tmp, head, hlist)
-			pid_tracker_del_node(e);
+			id_tracker_del_node(e);
 	}
-	kfree(lpf);
+	kfree(p);
+}
+
+int lttng_id_tracker_empty_set(struct lttng_id_tracker *lf)
+{
+	struct lttng_id_tracker_rcu *p, *oldp;
+
+	p = lttng_id_tracker_rcu_create();
+	if (!p)
+		return -ENOMEM;
+	oldp = lf->p;
+	rcu_assign_pointer(lf->p, p);
+	synchronize_trace();
+	lttng_id_tracker_rcu_destroy(oldp);
+	return 0;
+}
+
+void lttng_id_tracker_destroy(struct lttng_id_tracker *lf, bool rcu)
+{
+	struct lttng_id_tracker_rcu *p = lf->p;
+
+	if (!lf->p)
+		return;
+	rcu_assign_pointer(lf->p, NULL);
+	if (rcu)
+		synchronize_trace();
+	lttng_id_tracker_rcu_destroy(p);
 }
