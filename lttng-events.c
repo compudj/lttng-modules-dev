@@ -47,20 +47,26 @@
 #define METADATA_CACHE_DEFAULT_SIZE 4096
 
 static LIST_HEAD(sessions);
+static LIST_HEAD(trigger_groups);
 static LIST_HEAD(lttng_transport_list);
 /*
  * Protect the sessions and metadata caches.
  */
 static DEFINE_MUTEX(sessions_mutex);
 static struct kmem_cache *event_cache;
+static struct kmem_cache *trigger_cache;
 
 static void lttng_session_lazy_sync_event_enablers(struct lttng_session *session);
 static void lttng_session_sync_event_enablers(struct lttng_session *session);
 static void lttng_event_enabler_destroy(struct lttng_event_enabler *event_enabler);
+static void lttng_trigger_enabler_destroy(struct lttng_trigger_enabler *trigger_enabler);
+static void lttng_trigger_group_sync_enablers(struct lttng_trigger_group *trigger_group);
 
 static void _lttng_event_destroy(struct lttng_event *event);
+static void _lttng_trigger_destroy(struct lttng_trigger *trigger);
 static void _lttng_channel_destroy(struct lttng_channel *chan);
 static int _lttng_event_unregister(struct lttng_event *event);
+static int _lttng_trigger_unregister(struct lttng_trigger *trigger);
 static
 int _lttng_event_metadata_statedump(struct lttng_session *session,
 				  struct lttng_channel *chan,
@@ -173,6 +179,26 @@ err:
 	return NULL;
 }
 
+struct lttng_trigger_group *lttng_trigger_group_create(void)
+{
+	int i;
+	struct lttng_trigger_group *trigger_group =
+		lttng_kvzalloc(sizeof(struct lttng_trigger_group), GFP_KERNEL);
+	if (!trigger_group)
+		return NULL;
+
+	INIT_LIST_HEAD(&trigger_group->enablers_head);
+	INIT_LIST_HEAD(&trigger_group->triggers_head);
+	for (i = 0; i < LTTNG_TRIGGER_HT_SIZE; i++)
+		INIT_HLIST_HEAD(&trigger_group->triggers_ht.table[i]);
+
+	mutex_lock(&sessions_mutex);
+	list_add(&trigger_group->node, &trigger_groups);
+	mutex_unlock(&sessions_mutex);
+
+	return trigger_group;
+}
+
 void metadata_cache_destroy(struct kref *kref)
 {
 	struct lttng_metadata_cache *cache =
@@ -192,7 +218,7 @@ void lttng_session_destroy(struct lttng_session *session)
 	mutex_lock(&sessions_mutex);
 	WRITE_ONCE(session->active, 0);
 	list_for_each_entry(chan, &session->chan, list) {
-		ret = lttng_syscalls_unregister(chan);
+		ret = lttng_syscalls_unregister_event(chan);
 		WARN_ON(ret);
 	}
 	list_for_each_entry(event, &session->events, list) {
@@ -221,6 +247,39 @@ void lttng_session_destroy(struct lttng_session *session)
 	list_del(&session->list);
 	mutex_unlock(&sessions_mutex);
 	lttng_kvfree(session);
+}
+
+void lttng_trigger_group_destroy(struct lttng_trigger_group *trigger_group)
+{
+
+	struct lttng_trigger *trigger, *tmptrigger;
+	struct lttng_trigger_enabler *trigger_enabler, *tmp_trigger_enabler;
+	int ret;
+
+	if (!trigger_group)
+		return;
+
+	mutex_lock(&sessions_mutex);
+
+	list_for_each_entry_safe(trigger, tmptrigger,
+			&trigger_group->triggers_head, list) {
+		ret = _lttng_trigger_unregister(trigger);
+		WARN_ON(ret);
+	}
+
+	synchronize_trace();	/* Wait for in-flight triggers to complete */
+
+	list_for_each_entry_safe(trigger_enabler, tmp_trigger_enabler,
+			&trigger_group->enablers_head, node)
+		lttng_trigger_enabler_destroy(trigger_enabler);
+
+	list_for_each_entry_safe(trigger, tmptrigger,
+			&trigger_group->triggers_head, list)
+		_lttng_trigger_destroy(trigger);
+
+	list_del(&trigger_group->node);
+	mutex_unlock(&sessions_mutex);
+	lttng_kvfree(trigger_group);
 }
 
 int lttng_session_statedump(struct lttng_session *session)
@@ -459,6 +518,62 @@ int lttng_event_disable(struct lttng_event *event)
 	case LTTNG_KERNEL_KRETPROBE:
 		ret = lttng_kretprobes_event_enable_state(event, 0);
 		break;
+	default:
+		WARN_ON_ONCE(1);
+		ret = -EINVAL;
+	}
+end:
+	mutex_unlock(&sessions_mutex);
+	return ret;
+}
+
+int lttng_trigger_enable(struct lttng_trigger *trigger)
+{
+	int ret = 0;
+
+	mutex_lock(&sessions_mutex);
+	if (trigger->enabled) {
+		ret = -EEXIST;
+		goto end;
+	}
+	switch (trigger->instrumentation) {
+	case LTTNG_KERNEL_TRACEPOINT:
+		ret = -EINVAL;
+		break;
+	case LTTNG_KERNEL_SYSCALL:
+	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_FUNCTION:
+	case LTTNG_KERNEL_UPROBE:
+	case LTTNG_KERNEL_NOOP:
+	case LTTNG_KERNEL_KRETPROBE:
+	default:
+		WARN_ON_ONCE(1);
+		ret = -EINVAL;
+	}
+end:
+	mutex_unlock(&sessions_mutex);
+	return ret;
+}
+
+int lttng_trigger_disable(struct lttng_trigger *trigger)
+{
+	int ret = 0;
+
+	mutex_lock(&sessions_mutex);
+	if (!trigger->enabled) {
+		ret = -EEXIST;
+		goto end;
+	}
+	switch (trigger->instrumentation) {
+	case LTTNG_KERNEL_TRACEPOINT:
+		ret = -EINVAL;
+		break;
+	case LTTNG_KERNEL_SYSCALL:
+	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_FUNCTION:
+	case LTTNG_KERNEL_UPROBE:
+	case LTTNG_KERNEL_NOOP:
+	case LTTNG_KERNEL_KRETPROBE:
 	default:
 		WARN_ON_ONCE(1);
 		ret = -EINVAL;
@@ -808,6 +923,97 @@ full:
 	return ERR_PTR(ret);
 }
 
+struct lttng_trigger *_lttng_trigger_create(
+		const struct lttng_event_desc *event_desc,
+		uint64_t id, struct lttng_trigger_group *trigger_group,
+		struct lttng_kernel_trigger *trigger_param, void *filter,
+		enum lttng_kernel_instrumentation itype)
+{
+	struct lttng_trigger *trigger;
+	const char *event_name;
+	struct hlist_head *head;
+	int ret;
+
+	switch (itype) {
+	case LTTNG_KERNEL_TRACEPOINT:
+		event_name = event_desc->name;
+		break;
+	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_UPROBE:
+	case LTTNG_KERNEL_KRETPROBE:
+	case LTTNG_KERNEL_FUNCTION:
+	case LTTNG_KERNEL_NOOP:
+	case LTTNG_KERNEL_SYSCALL:
+	default:
+		WARN_ON_ONCE(1);
+		ret = -EINVAL;
+		goto type_error;
+	}
+
+	head = utils_borrow_hash_table_bucket(trigger_group->triggers_ht.table,
+		LTTNG_TRIGGER_HT_SIZE, event_name);
+	lttng_hlist_for_each_entry(trigger, head, hlist) {
+		WARN_ON_ONCE(!trigger->desc);
+		if (!strncmp(trigger->desc->name, event_name,
+					LTTNG_KERNEL_SYM_NAME_LEN - 1)
+				&& trigger_group == trigger->group
+				&& id == trigger->id) {
+			ret = -EEXIST;
+			goto exist;
+		}
+	}
+
+	trigger = kmem_cache_zalloc(trigger_cache, GFP_KERNEL);
+	if (!trigger) {
+		ret = -ENOMEM;
+		goto cache_error;
+	}
+	trigger->group = trigger_group;
+	trigger->id = id;
+	trigger->filter = filter;
+	trigger->instrumentation = itype;
+	trigger->evtype = LTTNG_TYPE_EVENT;
+	trigger->send_notification = lttng_trigger_send_notification;
+	INIT_LIST_HEAD(&trigger->bytecode_runtime_head);
+	INIT_LIST_HEAD(&trigger->enablers_ref_head);
+
+	switch (itype) {
+	case LTTNG_KERNEL_TRACEPOINT:
+		/* Event will be enabled by enabler sync. */
+		trigger->enabled = 0;
+		trigger->registered = 0;
+		trigger->desc = lttng_event_desc_get(event_name);
+		if (!trigger->desc) {
+			ret = -ENOENT;
+			goto register_error;
+		}
+		/* Populate lttng_trigger structure before event registration. */
+		smp_wmb();
+		break;
+	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_UPROBE:
+	case LTTNG_KERNEL_KRETPROBE:
+	case LTTNG_KERNEL_FUNCTION:
+	case LTTNG_KERNEL_NOOP:
+	case LTTNG_KERNEL_SYSCALL:
+	default:
+		WARN_ON_ONCE(1);
+		ret = -EINVAL;
+		goto register_error;
+	}
+
+	list_add(&trigger->list, &trigger_group->triggers_head);
+	hlist_add_head(&trigger->hlist, head);
+	return trigger;
+
+register_error:
+	kmem_cache_free(trigger_cache, trigger);
+cache_error:
+exist:
+type_error:
+	return ERR_PTR(ret);
+}
+
 struct lttng_event *lttng_event_create(struct lttng_channel *chan,
 				struct lttng_kernel_event *event_param,
 				void *filter,
@@ -821,6 +1027,21 @@ struct lttng_event *lttng_event_create(struct lttng_channel *chan,
 				itype);
 	mutex_unlock(&sessions_mutex);
 	return event;
+}
+
+struct lttng_trigger *lttng_trigger_create(
+		const struct lttng_event_desc *event_desc,
+		uint64_t id, struct lttng_trigger_group *trigger_group,
+		struct lttng_kernel_trigger *trigger_param, void *filter,
+		enum lttng_kernel_instrumentation itype)
+{
+	struct lttng_trigger *trigger;
+
+	mutex_lock(&sessions_mutex);
+	trigger = _lttng_trigger_create(event_desc, id, trigger_group,
+		trigger_param, filter, itype);
+	mutex_unlock(&sessions_mutex);
+	return trigger;
 }
 
 /* Only used for tracepoints for now. */
@@ -907,6 +1128,66 @@ int _lttng_event_unregister(struct lttng_event *event)
 	return ret;
 }
 
+/* Only used for tracepoints for now. */
+static
+void register_trigger(struct lttng_trigger *trigger)
+{
+	const struct lttng_event_desc *desc;
+	int ret = -EINVAL;
+
+	if (trigger->registered)
+		return;
+
+	desc = trigger->desc;
+	switch (trigger->instrumentation) {
+	case LTTNG_KERNEL_TRACEPOINT:
+		ret = lttng_wrapper_tracepoint_probe_register(desc->kname,
+						  desc->trigger_callback,
+						  trigger);
+		break;
+	case LTTNG_KERNEL_SYSCALL:
+	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_UPROBE:
+	case LTTNG_KERNEL_KRETPROBE:
+	case LTTNG_KERNEL_FUNCTION:
+	case LTTNG_KERNEL_NOOP:
+	default:
+		WARN_ON_ONCE(1);
+	}
+	if (!ret)
+		trigger->registered = 1;
+}
+
+static
+int _lttng_trigger_unregister(struct lttng_trigger *trigger)
+{
+	const struct lttng_event_desc *desc;
+	int ret = -EINVAL;
+
+	if (!trigger->registered)
+		return 0;
+
+	desc = trigger->desc;
+	switch (trigger->instrumentation) {
+	case LTTNG_KERNEL_TRACEPOINT:
+		ret = lttng_wrapper_tracepoint_probe_unregister(trigger->desc->kname,
+						  trigger->desc->trigger_callback,
+						  trigger);
+		break;
+	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_KRETPROBE:
+	case LTTNG_KERNEL_FUNCTION:
+	case LTTNG_KERNEL_SYSCALL:
+	case LTTNG_KERNEL_NOOP:
+	case LTTNG_KERNEL_UPROBE:
+	default:
+		WARN_ON_ONCE(1);
+	}
+	if (!ret)
+		trigger->registered = 0;
+	return ret;
+}
+
 /*
  * Only used internally at session destruction.
  */
@@ -942,6 +1223,29 @@ void _lttng_event_destroy(struct lttng_event *event)
 	list_del(&event->list);
 	lttng_destroy_context(event->ctx);
 	kmem_cache_free(event_cache, event);
+}
+
+/*
+ * Only used internally at session destruction.
+ */
+static
+void _lttng_trigger_destroy(struct lttng_trigger *trigger)
+{
+	switch (trigger->instrumentation) {
+	case LTTNG_KERNEL_TRACEPOINT:
+		lttng_event_desc_put(trigger->desc);
+		break;
+	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_KRETPROBE:
+	case LTTNG_KERNEL_FUNCTION:
+	case LTTNG_KERNEL_NOOP:
+	case LTTNG_KERNEL_SYSCALL:
+	case LTTNG_KERNEL_UPROBE:
+	default:
+		WARN_ON_ONCE(1);
+	}
+	list_del(&trigger->list);
+	kmem_cache_free(trigger_cache, trigger);
 }
 
 struct lttng_id_tracker *get_tracker(struct lttng_session *session,
@@ -1263,10 +1567,30 @@ static
 int lttng_event_enabler_match_event(struct lttng_event_enabler *event_enabler,
 		struct lttng_event *event)
 {
-	if (event_enabler->base.event_param.instrumentation != event->instrumentation)
+	struct lttng_enabler *base_enabler = lttng_event_enabler_as_enabler(
+		event_enabler);
+
+	if (base_enabler->event_param.instrumentation != event->instrumentation)
 		return 0;
-	if (lttng_desc_match_enabler(event->desc, lttng_event_enabler_as_enabler(event_enabler))
+	if (lttng_desc_match_enabler(event->desc, base_enabler)
 			&& event->chan == event_enabler->chan)
+		return 1;
+	else
+		return 0;
+}
+
+static
+int lttng_trigger_enabler_match_trigger(struct lttng_trigger_enabler *trigger_enabler,
+		struct lttng_trigger *trigger)
+{
+	struct lttng_enabler *base_enabler = lttng_trigger_enabler_as_enabler(
+		trigger_enabler);
+
+	if (base_enabler->event_param.instrumentation != trigger->instrumentation)
+		return 0;
+	if (lttng_desc_match_enabler(trigger->desc, base_enabler)
+			&& trigger->group == trigger_enabler->group
+			&& trigger->id == trigger_enabler->id)
 		return 1;
 	else
 		return 0;
@@ -1342,11 +1666,65 @@ void lttng_create_tracepoint_event_if_missing(struct lttng_event_enabler *event_
 }
 
 static
+void lttng_create_tracepoint_trigger_if_missing(struct lttng_trigger_enabler *trigger_enabler)
+{
+	struct lttng_trigger_group *trigger_group = trigger_enabler->group;
+	struct lttng_probe_desc *probe_desc;
+	const struct lttng_event_desc *desc;
+	int i;
+	struct list_head *probe_list;
+
+	probe_list = lttng_get_probe_list_head();
+	/*
+	 * For each probe event, if we find that a probe event matches
+	 * our enabler, create an associated lttng_trigger if not
+	 * already present.
+	 */
+	list_for_each_entry(probe_desc, probe_list, head) {
+		for (i = 0; i < probe_desc->nr_events; i++) {
+			int found = 0;
+			struct hlist_head *head;
+			struct lttng_trigger *trigger;
+
+			desc = probe_desc->event_desc[i];
+			if (!lttng_desc_match_enabler(desc,
+					lttng_trigger_enabler_as_enabler(trigger_enabler)))
+				continue;
+
+			/*
+			 * Check if already created.
+			 */
+			head = utils_borrow_hash_table_bucket(
+				trigger_group->triggers_ht.table,
+				LTTNG_TRIGGER_HT_SIZE, desc->name);
+			lttng_hlist_for_each_entry(trigger, head, hlist) {
+				if (trigger->desc == desc
+						&& trigger->id == trigger_enabler->id)
+					found = 1;
+			}
+			if (found)
+				continue;
+
+			/*
+			 * We need to create a trigger for this event probe.
+			 */
+			trigger = _lttng_trigger_create(desc,
+				trigger_enabler->id, trigger_group, NULL, NULL,
+				LTTNG_KERNEL_TRACEPOINT);
+			if (IS_ERR(trigger)) {
+				printk(KERN_INFO "Unable to create trigger %s\n",
+					probe_desc->event_desc[i]->name);
+			}
+		}
+	}
+}
+
+static
 void lttng_create_syscall_event_if_missing(struct lttng_event_enabler *event_enabler)
 {
 	int ret;
 
-	ret = lttng_syscalls_register(event_enabler->chan, NULL);
+	ret = lttng_syscalls_register_event(event_enabler->chan, NULL);
 	WARN_ON_ONCE(ret);
 }
 
@@ -1419,6 +1797,77 @@ int lttng_event_enabler_ref_events(struct lttng_event_enabler *event_enabler)
 	return 0;
 }
 
+void lttng_trigger_send_notification(struct lttng_trigger *trigger)
+{
+	printk(KERN_WARNING "Trigger id: %llu TODO: Implement sending "
+		"notifications\n", trigger->id);
+}
+EXPORT_SYMBOL_GPL(lttng_trigger_send_notification);
+
+/*
+ * Create struct lttng_trigger if it is missing and present in the list of
+ * tracepoint probes.
+ * Should be called with sessions mutex held.
+ */
+static
+void lttng_create_trigger_if_missing(struct lttng_trigger_enabler *trigger_enabler)
+{
+	switch (trigger_enabler->base.event_param.instrumentation) {
+	case LTTNG_KERNEL_TRACEPOINT:
+		lttng_create_tracepoint_trigger_if_missing(trigger_enabler);
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		break;
+	}
+}
+
+/*
+ * Create triggers associated with a trigger enabler (if not already present).
+ */
+static
+int lttng_trigger_enabler_ref_triggers(struct lttng_trigger_enabler *trigger_enabler)
+{
+	struct lttng_trigger_group *trigger_group = trigger_enabler->group;
+	struct lttng_trigger *trigger;
+
+	/* First ensure that probe triggers are created for this enabler. */
+	lttng_create_trigger_if_missing(trigger_enabler);
+
+	/* Link the created trigger with its associated enabler. */
+	list_for_each_entry(trigger, &trigger_group->triggers_head, list) {
+		struct lttng_enabler_ref *enabler_ref;
+
+		if (!lttng_trigger_enabler_match_trigger(trigger_enabler, trigger))
+			continue;
+
+		enabler_ref = lttng_enabler_ref(&trigger->enablers_ref_head,
+			lttng_trigger_enabler_as_enabler(trigger_enabler));
+		if (!enabler_ref) {
+			/*
+			 * If no backward ref, create it.
+			 * Add backward ref from trigger to enabler.
+			 */
+			enabler_ref = kzalloc(sizeof(*enabler_ref), GFP_KERNEL);
+			if (!enabler_ref)
+				return -ENOMEM;
+
+			enabler_ref->ref = lttng_trigger_enabler_as_enabler(
+				trigger_enabler);
+			list_add(&enabler_ref->node,
+				&trigger->enablers_ref_head);
+		}
+
+		/*
+		 * Link filter bytecodes if not linked yet.
+		 */
+		lttng_enabler_link_bytecode(trigger->desc,
+			trigger_group->ctx, &trigger->bytecode_runtime_head,
+			lttng_trigger_enabler_as_enabler(trigger_enabler));
+	}
+	return 0;
+}
+
 /*
  * Called at module load: connect the probe on all enablers matching
  * this event.
@@ -1430,6 +1879,39 @@ int lttng_fix_pending_events(void)
 
 	list_for_each_entry(session, &sessions, list)
 		lttng_session_lazy_sync_event_enablers(session);
+	return 0;
+}
+
+static bool lttng_trigger_group_has_active_triggers(
+		struct lttng_trigger_group *trigger_group)
+{
+	struct lttng_trigger_enabler *trigger_enabler;
+
+	list_for_each_entry(trigger_enabler, &trigger_group->enablers_head,
+			node) {
+		if (trigger_enabler->base.enabled)
+			return true;
+	}
+	return false;
+}
+
+bool lttng_trigger_active(void)
+{
+	struct lttng_trigger_group *trigger_group;
+
+	list_for_each_entry(trigger_group, &trigger_groups, node) {
+		if (lttng_trigger_group_has_active_triggers(trigger_group))
+			return true;
+	}
+	return false;
+}
+
+int lttng_fix_pending_triggers(void)
+{
+	struct lttng_trigger_group *trigger_group;
+
+	list_for_each_entry(trigger_group, &trigger_groups, node)
+		lttng_trigger_group_sync_enablers(trigger_group);
 	return 0;
 }
 
@@ -1566,6 +2048,93 @@ void lttng_event_enabler_destroy(struct lttng_event_enabler *event_enabler)
 	kfree(event_enabler);
 }
 
+struct lttng_trigger_enabler *lttng_trigger_enabler_create(
+		struct lttng_trigger_group *trigger_group,
+		enum lttng_enabler_format_type format_type,
+		struct lttng_kernel_trigger *trigger_param)
+{
+	struct lttng_trigger_enabler *trigger_enabler;
+
+	trigger_enabler = kzalloc(sizeof(*trigger_enabler), GFP_KERNEL);
+	if (!trigger_enabler)
+		return NULL;
+
+	trigger_enabler->base.format_type = format_type;
+	INIT_LIST_HEAD(&trigger_enabler->base.filter_bytecode_head);
+
+	trigger_enabler->id = trigger_param->id;
+
+	memcpy(&trigger_enabler->base.event_param.name, trigger_param->name,
+		sizeof(trigger_enabler->base.event_param.name));
+	trigger_enabler->base.event_param.instrumentation = trigger_param->instrumentation;
+	trigger_enabler->base.evtype = LTTNG_TYPE_ENABLER;
+
+	trigger_enabler->base.enabled = 0;
+	trigger_enabler->group = trigger_group;
+
+	mutex_lock(&sessions_mutex);
+	list_add(&trigger_enabler->node, &trigger_enabler->group->enablers_head);
+	lttng_trigger_group_sync_enablers(trigger_enabler->group);
+
+	mutex_unlock(&sessions_mutex);
+
+	return trigger_enabler;
+}
+
+int lttng_trigger_enabler_enable(struct lttng_trigger_enabler *trigger_enabler)
+{
+	mutex_lock(&sessions_mutex);
+	lttng_trigger_enabler_as_enabler(trigger_enabler)->enabled = 1;
+	lttng_trigger_group_sync_enablers(trigger_enabler->group);
+	mutex_unlock(&sessions_mutex);
+	return 0;
+}
+
+int lttng_trigger_enabler_disable(struct lttng_trigger_enabler *trigger_enabler)
+{
+	mutex_lock(&sessions_mutex);
+	lttng_trigger_enabler_as_enabler(trigger_enabler)->enabled = 0;
+	lttng_trigger_group_sync_enablers(trigger_enabler->group);
+	mutex_unlock(&sessions_mutex);
+	return 0;
+}
+
+int lttng_trigger_enabler_attach_bytecode(struct lttng_trigger_enabler *trigger_enabler,
+		struct lttng_kernel_filter_bytecode __user *bytecode)
+{
+	int ret;
+
+	ret = lttng_enabler_attach_bytecode(
+		lttng_trigger_enabler_as_enabler(trigger_enabler), bytecode);
+	if (ret)
+		goto error;
+
+	lttng_trigger_group_sync_enablers(trigger_enabler->group);
+	return 0;
+
+error:
+	return ret;
+}
+
+int lttng_trigger_enabler_attach_context(struct lttng_trigger_enabler *trigger_enabler,
+		struct lttng_kernel_context *context_param)
+{
+	return -ENOSYS;
+}
+
+static
+void lttng_trigger_enabler_destroy(struct lttng_trigger_enabler *trigger_enabler)
+{
+	if (!trigger_enabler) {
+		return;
+	}
+
+	list_del(&trigger_enabler->node);
+
+	lttng_enabler_destroy(lttng_trigger_enabler_as_enabler(trigger_enabler));
+	kfree(trigger_enabler);
+}
+
 /*
  * lttng_session_sync_event_enablers should be called just before starting a
  * session.
@@ -1656,6 +2225,73 @@ void lttng_session_lazy_sync_event_enablers(struct lttng_session *session)
 	if (!session->active)
 		return;
 	lttng_session_sync_event_enablers(session);
+}
+
+static
+void lttng_trigger_group_sync_enablers(struct lttng_trigger_group *trigger_group)
+{
+	struct lttng_trigger_enabler *trigger_enabler;
+	struct lttng_trigger *trigger;
+
+	list_for_each_entry(trigger_enabler, &trigger_group->enablers_head, node)
+		lttng_trigger_enabler_ref_triggers(trigger_enabler);
+
+	/*
+	 * For each trigger, if at least one of its enablers is enabled,
+	 * we enable the trigger, else we disable it.
+	 */
+	list_for_each_entry(trigger, &trigger_group->triggers_head, list) {
+		struct lttng_enabler_ref *enabler_ref;
+		struct lttng_bytecode_runtime *runtime;
+		int enabled = 0, has_enablers_without_bytecode = 0;
+
+		switch (trigger->instrumentation) {
+		case LTTNG_KERNEL_TRACEPOINT:
+		case LTTNG_KERNEL_SYSCALL:
+			/* Enable triggers */
+			list_for_each_entry(enabler_ref,
+					&trigger->enablers_ref_head, node) {
+				if (enabler_ref->ref->enabled) {
+					enabled = 1;
+					break;
+				}
+			}
+			break;
+		default:
+			/* Not handled with sync. */
+			continue;
+		}
+
+		WRITE_ONCE(trigger->enabled, enabled);
+		/*
+		 * Sync tracepoint registration with trigger enabled
+		 * state.
+		 */
+		if (enabled) {
+			if (!trigger->registered)
+				register_trigger(trigger);
+		} else {
+			if (trigger->registered)
+				_lttng_trigger_unregister(trigger);
+		}
+
+		/* Check if has enablers without bytecode enabled */
+		list_for_each_entry(enabler_ref,
+				&trigger->enablers_ref_head, node) {
+			if (enabler_ref->ref->enabled
+					&& list_empty(&enabler_ref->ref->filter_bytecode_head)) {
+				has_enablers_without_bytecode = 1;
+				break;
+			}
+		}
+		trigger->has_enablers_without_bytecode =
+			has_enablers_without_bytecode;
+
+		/* Enable filters */
+		list_for_each_entry(runtime,
+				&trigger->bytecode_runtime_head, node)
+			lttng_filter_sync_state(runtime);
+	}
 }
 
 /*
@@ -2975,7 +3611,12 @@ static int __init lttng_events_init(void)
 	event_cache = KMEM_CACHE(lttng_event, 0);
 	if (!event_cache) {
 		ret = -ENOMEM;
-		goto error_kmem;
+		goto error_kmem_event;
+	}
+	trigger_cache = KMEM_CACHE(lttng_trigger, 0);
+	if (!trigger_cache) {
+		ret = -ENOMEM;
+		goto error_kmem_trigger;
 	}
 	ret = lttng_abi_init();
 	if (ret)
@@ -3009,8 +3650,10 @@ error_hotplug:
 error_logger:
 	lttng_abi_exit();
 error_abi:
+	kmem_cache_destroy(trigger_cache);
+error_kmem_trigger:
 	kmem_cache_destroy(event_cache);
-error_kmem:
+error_kmem_event:
 	lttng_tracepoint_exit();
 error_tp:
 	lttng_context_exit();
@@ -3045,6 +3688,7 @@ static void __exit lttng_events_exit(void)
 	list_for_each_entry_safe(session, tmpsession, &sessions, list)
 		lttng_session_destroy(session);
 	kmem_cache_destroy(event_cache);
+	kmem_cache_destroy(trigger_cache);
 	lttng_tracepoint_exit();
 	lttng_context_exit();
 	printk(KERN_NOTICE "LTTng: Unloaded modules v%s.%s.%s%s (%s)%s%s\n",

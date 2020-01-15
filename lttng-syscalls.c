@@ -743,7 +743,7 @@ int fill_table(const struct trace_syscall_entry *table, size_t table_len,
 /*
  * Should be called with sessions lock held.
  */
-int lttng_syscalls_register(struct lttng_channel *chan, void *filter)
+int lttng_syscalls_register_event(struct lttng_channel *chan, void *filter)
 {
 	struct lttng_kernel_event ev;
 	int ret;
@@ -898,7 +898,7 @@ int lttng_syscalls_register(struct lttng_channel *chan, void *filter)
 /*
  * Only called at session destruction.
  */
-int lttng_syscalls_unregister(struct lttng_channel *chan)
+int lttng_syscalls_unregister_event(struct lttng_channel *chan)
 {
 	int ret;
 

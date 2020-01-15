@@ -53,6 +53,7 @@
 static struct proc_dir_entry *lttng_proc_dentry;
 static const struct file_operations lttng_fops;
 static const struct file_operations lttng_session_fops;
+static const struct file_operations lttng_trigger_group_fops;
 static const struct file_operations lttng_channel_fops;
 static const struct file_operations lttng_metadata_fops;
 static const struct file_operations lttng_event_fops;
@@ -95,6 +96,41 @@ file_error:
 	put_unused_fd(session_fd);
 fd_error:
 	lttng_session_destroy(session);
+	return ret;
+}
+
+static
+int lttng_abi_create_trigger_group(void)
+{
+	struct lttng_trigger_group *trigger_group;
+	struct file *trigger_group_file;
+	int trigger_group_fd, ret;
+
+	trigger_group = lttng_trigger_group_create();
+	if (!trigger_group)
+		return -ENOMEM;
+
+	trigger_group_fd = lttng_get_unused_fd();
+	if (trigger_group_fd < 0) {
+		ret = trigger_group_fd;
+		goto fd_error;
+	}
+	trigger_group_file = anon_inode_getfile("[lttng_trigger_group]",
+					  &lttng_trigger_group_fops,
+					  trigger_group, O_RDWR);
+	if (IS_ERR(trigger_group_file)) {
+		ret = PTR_ERR(trigger_group_file);
+		goto file_error;
+	}
+
+	trigger_group->file = trigger_group_file;
+	fd_install(trigger_group_fd, trigger_group_file);
+	return trigger_group_fd;
+
+file_error:
+	put_unused_fd(trigger_group_fd);
+fd_error:
+	lttng_trigger_group_destroy(trigger_group);
 	return ret;
 }
 
@@ -297,6 +333,8 @@ long lttng_abi_add_context(struct file *file,
  *		Returns after all previously running probes have completed
  *	LTTNG_KERNEL_TRACER_ABI_VERSION
  *		Returns the LTTng kernel tracer ABI version
+ *	LTTNG_KERNEL_TRIGGER_GROUP_CREATE
+ *		Returns a LTTng trigger group file descriptor
  *
  * The returned session will be deleted when its file descriptor is closed.
  */
@@ -307,6 +345,8 @@ long lttng_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case LTTNG_KERNEL_OLD_SESSION:
 	case LTTNG_KERNEL_SESSION:
 		return lttng_abi_create_session();
+	case LTTNG_KERNEL_TRIGGER_GROUP_CREATE:
+		return lttng_abi_create_trigger_group();
 	case LTTNG_KERNEL_OLD_TRACER_VERSION:
 	{
 		struct lttng_kernel_tracer_version v;
@@ -744,6 +784,10 @@ static const struct file_operations lttng_session_fops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = lttng_session_ioctl,
 #endif
+};
+
+static const struct file_operations lttng_trigger_group_notif_fops = {
+	.owner = THIS_MODULE,
 };
 
 /**
@@ -1274,6 +1318,260 @@ file_error:
 fd_error:
 	return ret;
 }
+
+static
+long lttng_trigger_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct lttng_trigger_enabler *trigger_enabler;
+	enum lttng_event_type *evtype = file->private_data;
+
+	switch (cmd) {
+	case LTTNG_KERNEL_ENABLE:
+		switch (*evtype) {
+		case LTTNG_TYPE_EVENT:
+			return -EINVAL;
+		case LTTNG_TYPE_ENABLER:
+			trigger_enabler = file->private_data;
+			return lttng_trigger_enabler_enable(trigger_enabler);
+		default:
+			WARN_ON_ONCE(1);
+			return -ENOSYS;
+		}
+	case LTTNG_KERNEL_DISABLE:
+		switch (*evtype) {
+		case LTTNG_TYPE_EVENT:
+			return -EINVAL;
+		case LTTNG_TYPE_ENABLER:
+			trigger_enabler = file->private_data;
+			return lttng_trigger_enabler_disable(trigger_enabler);
+		default:
+			WARN_ON_ONCE(1);
+			return -ENOSYS;
+		}
+	case LTTNG_KERNEL_FILTER:
+		switch (*evtype) {
+		case LTTNG_TYPE_EVENT:
+			return -EINVAL;
+		case LTTNG_TYPE_ENABLER:
+			trigger_enabler = file->private_data;
+			return lttng_trigger_enabler_attach_bytecode(trigger_enabler,
+				(struct lttng_kernel_filter_bytecode __user *) arg);
+		default:
+			WARN_ON_ONCE(1);
+			return -ENOSYS;
+		}
+	default:
+		return -ENOIOCTLCMD;
+	}
+}
+
+static
+int lttng_trigger_release(struct inode *inode, struct file *file)
+{
+	struct lttng_trigger *trigger;
+	struct lttng_trigger_enabler *trigger_enabler;
+	enum lttng_event_type *evtype = file->private_data;
+
+	if (!evtype)
+		return 0;
+
+	switch (*evtype) {
+	case LTTNG_TYPE_EVENT:
+		trigger = file->private_data;
+		if (trigger)
+			fput(trigger->group->file);
+		break;
+	case LTTNG_TYPE_ENABLER:
+		trigger_enabler = file->private_data;
+		if (trigger_enabler)
+			fput(trigger_enabler->group->file);
+		break;
+	default:
+		WARN_ON_ONCE(1);
+		break;
+	}
+
+	return 0;
+}
+
+static const struct file_operations lttng_trigger_fops = {
+	.owner = THIS_MODULE,
+	.release = lttng_trigger_release,
+	.unlocked_ioctl = lttng_trigger_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = lttng_trigger_ioctl,
+#endif
+};
+
+static
+int lttng_abi_create_trigger(struct file *trigger_group_file,
+		struct lttng_kernel_trigger *trigger_param)
+{
+	struct lttng_trigger_group *trigger_group = trigger_group_file->private_data;
+	int trigger_fd, ret;
+	struct file *trigger_file;
+	void *priv;
+
+	switch (trigger_param->instrumentation) {
+	case LTTNG_KERNEL_TRACEPOINT:
+		break;
+	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_UPROBE:
+	case LTTNG_KERNEL_KRETPROBE:
+	case LTTNG_KERNEL_FUNCTION:
+	case LTTNG_KERNEL_NOOP:
+	case LTTNG_KERNEL_SYSCALL:
+	default:
+		ret = -EINVAL;
+		goto inval_instr;
+	}
+
+	trigger_param->name[LTTNG_KERNEL_SYM_NAME_LEN - 1] = '\0';
+
+	trigger_fd = lttng_get_unused_fd();
+	if (trigger_fd < 0) {
+		ret = trigger_fd;
+		goto fd_error;
+	}
+
+	trigger_file = anon_inode_getfile("[lttng_trigger]",
+					&lttng_trigger_fops,
+					NULL, O_RDWR);
+	if (IS_ERR(trigger_file)) {
+		ret = PTR_ERR(trigger_file);
+		goto file_error;
+	}
+
+	/* The trigger holds a reference on the trigger group. */
+	if (!atomic_long_add_unless(&trigger_group_file->f_count, 1, LONG_MAX)) {
+		ret = -EOVERFLOW;
+		goto refcount_error;
+	}
+
+	if (trigger_param->instrumentation == LTTNG_KERNEL_TRACEPOINT
+			|| trigger_param->instrumentation == LTTNG_KERNEL_SYSCALL) {
+		struct lttng_trigger_enabler *enabler;
+
+		if (strutils_is_star_glob_pattern(trigger_param->name)) {
+			/*
+			 * If the event name is a star globbing pattern,
+			 * we create the special star globbing enabler.
+			 */
+			enabler = lttng_trigger_enabler_create(trigger_group,
+				LTTNG_ENABLER_FORMAT_STAR_GLOB, trigger_param);
+		} else {
+			enabler = lttng_trigger_enabler_create(trigger_group,
+				LTTNG_ENABLER_FORMAT_NAME, trigger_param);
+		}
+		priv = enabler;
+	} else {
+		struct lttng_trigger *trigger;
+
+		/*
+		 * We tolerate no failure path after trigger creation. It
+		 * will stay invariant for the rest of the session.
+		 */
+		trigger = lttng_trigger_create(NULL, trigger_param->id,
+			trigger_group, trigger_param, NULL,
+			trigger_param->instrumentation);
+		WARN_ON_ONCE(!trigger);
+		if (IS_ERR(trigger)) {
+			ret = PTR_ERR(trigger);
+			goto trigger_error;
+		}
+		priv = trigger;
+	}
+	trigger_file->private_data = priv;
+	fd_install(trigger_fd, trigger_file);
+	return trigger_fd;
+
+trigger_error:
+	atomic_long_dec(&trigger_group_file->f_count);
+refcount_error:
+	fput(trigger_file);
+file_error:
+	put_unused_fd(trigger_fd);
+fd_error:
+inval_instr:
+	return ret;
+}
+
+static
+int lttng_abi_create_trigger_group_notification_fd(struct file *file)
+{
+	struct lttng_trigger_group *trigger_group = file->private_data;
+	struct file *trigger_group_notif_file;
+	int trigger_notif_fd, ret;
+
+	/* Only allow for a single notification fd per group. */
+	if (trigger_group->notif_file) {
+		return -EBUSY;
+	}
+
+	trigger_notif_fd = lttng_get_unused_fd();
+	if (trigger_notif_fd < 0) {
+		ret = trigger_notif_fd;
+		goto fd_error;
+	}
+	trigger_group_notif_file = anon_inode_getfile("[lttng_trigger_notif]",
+					  &lttng_trigger_group_notif_fops,
+					  trigger_group, O_RDWR);
+	if (IS_ERR(trigger_group_notif_file)) {
+		ret = PTR_ERR(trigger_group_notif_file);
+		goto file_error;
+	}
+	trigger_group->notif_file = trigger_group_notif_file;
+	fd_install(trigger_notif_fd, trigger_group_notif_file);
+	return trigger_notif_fd;
+
+file_error:
+	put_unused_fd(trigger_notif_fd);
+fd_error:
+	return ret;
+}
+
+static
+long lttng_trigger_group_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	switch (cmd) {
+	case LTTNG_KERNEL_TRIGGER_GROUP_NOTIFICATION_FD:
+	{
+		return lttng_abi_create_trigger_group_notification_fd(file);
+	}
+	case LTTNG_KERNEL_TRIGGER_CREATE:
+	{
+		struct lttng_kernel_trigger utrigger_param;
+
+		if (copy_from_user(&utrigger_param,
+				(struct lttng_kernel_trigger __user *) arg,
+				sizeof(utrigger_param)))
+			return -EFAULT;
+		return lttng_abi_create_trigger(file, &utrigger_param);
+	}
+	default:
+		return -ENOIOCTLCMD;
+	}
+	return 0;
+}
+
+static
+int lttng_trigger_group_release(struct inode *inode, struct file *file)
+{
+	struct lttng_trigger_group *trigger_group = file->private_data;
+
+	if (trigger_group)
+		lttng_trigger_group_destroy(trigger_group);
+	return 0;
+}
+
+static const struct file_operations lttng_trigger_group_fops = {
+	.owner = THIS_MODULE,
+	.release = lttng_trigger_group_release,
+	.unlocked_ioctl = lttng_trigger_group_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = lttng_trigger_group_ioctl,
+#endif
+};
 
 /**
  *	lttng_channel_ioctl - lttng syscall through ioctl
