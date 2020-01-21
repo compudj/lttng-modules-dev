@@ -541,11 +541,11 @@ int lttng_trigger_enable(struct lttng_trigger *trigger)
 		ret = -EINVAL;
 		break;
 	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_UPROBE:
 		WRITE_ONCE(trigger->enabled, 1);
 		break;
 	case LTTNG_KERNEL_SYSCALL:
 	case LTTNG_KERNEL_FUNCTION:
-	case LTTNG_KERNEL_UPROBE:
 	case LTTNG_KERNEL_NOOP:
 	case LTTNG_KERNEL_KRETPROBE:
 	default:
@@ -571,11 +571,11 @@ int lttng_trigger_disable(struct lttng_trigger *trigger)
 		ret = -EINVAL;
 		break;
 	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_UPROBE:
 		WRITE_ONCE(trigger->enabled, 0);
 		break;
 	case LTTNG_KERNEL_SYSCALL:
 	case LTTNG_KERNEL_FUNCTION:
-	case LTTNG_KERNEL_UPROBE:
 	case LTTNG_KERNEL_NOOP:
 	case LTTNG_KERNEL_KRETPROBE:
 	default:
@@ -943,9 +943,9 @@ struct lttng_trigger *_lttng_trigger_create(
 		event_name = event_desc->name;
 		break;
 	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_UPROBE:
 		event_name = trigger_param->name;
 		break;
-	case LTTNG_KERNEL_UPROBE:
 	case LTTNG_KERNEL_KRETPROBE:
 	case LTTNG_KERNEL_FUNCTION:
 	case LTTNG_KERNEL_NOOP:
@@ -1021,6 +1021,27 @@ struct lttng_trigger *_lttng_trigger_create(
 		WARN_ON_ONCE(!ret);
 		break;
 	case LTTNG_KERNEL_UPROBE:
+		/*
+		 * Needs to be explicitly enabled after creation, since
+		 * we may want to apply filters.
+		 */
+		trigger->enabled = 0;
+		trigger->registered = 1;
+
+		/*
+		 * Populate lttng_trigger structure before trigger
+		 * registration.
+		 */
+		smp_wmb();
+
+		ret = lttng_uprobes_register_trigger(trigger_param->name,
+				trigger_param->u.uprobe.fd,
+				trigger);
+		if (ret)
+			goto register_error;
+		ret = try_module_get(trigger->desc->owner);
+		WARN_ON_ONCE(!ret);
+		break;
 	case LTTNG_KERNEL_KRETPROBE:
 	case LTTNG_KERNEL_FUNCTION:
 	case LTTNG_KERNEL_NOOP:
@@ -1175,10 +1196,10 @@ void register_trigger(struct lttng_trigger *trigger)
 						  trigger);
 		break;
 	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_UPROBE:
 		ret = 0;
 		break;
 	case LTTNG_KERNEL_SYSCALL:
-	case LTTNG_KERNEL_UPROBE:
 	case LTTNG_KERNEL_KRETPROBE:
 	case LTTNG_KERNEL_FUNCTION:
 	case LTTNG_KERNEL_NOOP:
@@ -1209,11 +1230,14 @@ int _lttng_trigger_unregister(struct lttng_trigger *trigger)
 		lttng_kprobes_unregister_trigger(trigger);
 		ret = 0;
 		break;
+	case LTTNG_KERNEL_UPROBE:
+		lttng_uprobes_unregister_trigger(trigger);
+		ret = 0;
+		break;
 	case LTTNG_KERNEL_KRETPROBE:
 	case LTTNG_KERNEL_FUNCTION:
 	case LTTNG_KERNEL_SYSCALL:
 	case LTTNG_KERNEL_NOOP:
-	case LTTNG_KERNEL_UPROBE:
 	default:
 		WARN_ON_ONCE(1);
 	}
@@ -1273,11 +1297,14 @@ void _lttng_trigger_destroy(struct lttng_trigger *trigger)
 		module_put(trigger->desc->owner);
 		lttng_kprobes_destroy_trigger_private(trigger);
 		break;
+	case LTTNG_KERNEL_UPROBE:
+		module_put(trigger->desc->owner);
+		lttng_uprobes_destroy_trigger_private(trigger);
+		break;
 	case LTTNG_KERNEL_KRETPROBE:
 	case LTTNG_KERNEL_FUNCTION:
 	case LTTNG_KERNEL_NOOP:
 	case LTTNG_KERNEL_SYSCALL:
-	case LTTNG_KERNEL_UPROBE:
 	default:
 		WARN_ON_ONCE(1);
 	}
@@ -2151,6 +2178,18 @@ int lttng_trigger_enabler_attach_bytecode(struct lttng_trigger_enabler *trigger_
 
 error:
 	return ret;
+}
+
+int lttng_trigger_add_callsite(struct lttng_trigger *trigger,
+		struct lttng_kernel_event_callsite __user *callsite)
+{
+
+	switch (trigger->instrumentation) {
+	case LTTNG_KERNEL_UPROBE:
+		return lttng_uprobes_trigger_add_callsite(trigger, callsite);
+	default:
+		return -EINVAL;
+	}
 }
 
 int lttng_trigger_enabler_attach_context(struct lttng_trigger_enabler *trigger_enabler,
