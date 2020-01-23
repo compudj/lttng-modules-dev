@@ -1112,7 +1112,7 @@ void register_event(struct lttng_event *event)
 						  event);
 		break;
 	case LTTNG_KERNEL_SYSCALL:
-		ret = lttng_syscall_filter_enable(event->chan,
+		ret = lttng_syscall_filter_enable_event(event->chan,
 			desc->name);
 		break;
 	case LTTNG_KERNEL_KPROBE:
@@ -1160,7 +1160,7 @@ int _lttng_event_unregister(struct lttng_event *event)
 		ret = 0;
 		break;
 	case LTTNG_KERNEL_SYSCALL:
-		ret = lttng_syscall_filter_disable(event->chan,
+		ret = lttng_syscall_filter_disable_event(event->chan,
 			desc->name);
 		break;
 	case LTTNG_KERNEL_NOOP:
