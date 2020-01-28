@@ -1307,6 +1307,30 @@ int lttng_abi_create_event(struct file *channel_file,
 		ret = -EOVERFLOW;
 		goto refcount_error;
 	}
+	/* Limit ABI to implemented features. */
+	if (event_param->instrumentation == LTTNG_KERNEL_SYSCALL) {
+		switch (event_param->u.syscall.entryexit) {
+		case LTTNG_KERNEL_SYSCALL_ENTRYEXIT:
+			break;
+		default:
+			ret = -EINVAL;
+			goto event_error;
+		}
+		switch (event_param->u.syscall.abi) {
+		case LTTNG_KERNEL_SYSCALL_ABI_ALL:
+			break;
+		default:
+			ret = -EINVAL;
+			goto event_error;
+		}
+		switch (event_param->u.syscall.match) {
+		case LTTNG_SYSCALL_MATCH_NAME:
+			break;
+		default:
+			ret = -EINVAL;
+			goto event_error;
+		}
+	}
 	if (event_param->instrumentation == LTTNG_KERNEL_TRACEPOINT
 			|| event_param->instrumentation == LTTNG_KERNEL_SYSCALL) {
 		struct lttng_enabler *enabler;
