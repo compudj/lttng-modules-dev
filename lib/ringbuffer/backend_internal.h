@@ -224,7 +224,8 @@ struct lib_ring_buffer_backend_pages *
  * The ring buffer can count events recorded and overwritten per buffer,
  * but it is disabled by default due to its performance overhead.
  */
-#ifdef LTTNG_RING_BUFFER_COUNT_EVENTS
+//TODO: enabling accounting for triggers ring buffer iterator.
+#if 1 //def LTTNG_RING_BUFFER_COUNT_EVENTS
 static inline
 void subbuffer_count_record(const struct lib_ring_buffer_config *config,
 			    struct lib_ring_buffer_backend *bufb,

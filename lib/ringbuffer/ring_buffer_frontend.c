@@ -1517,7 +1517,7 @@ void lib_ring_buffer_print_buffer_errors(struct lib_ring_buffer *buf,
 						       cpu);
 }
 
-#ifdef LTTNG_RING_BUFFER_COUNT_EVENTS
+#if 1//def LTTNG_RING_BUFFER_COUNT_EVENTS
 static
 void lib_ring_buffer_print_records_count(struct channel *chan,
 					 struct lib_ring_buffer *buf,
@@ -2251,7 +2251,7 @@ void lib_ring_buffer_vmcore_check_deliver(const struct lib_ring_buffer_config *c
  * The ring buffer can count events recorded and overwritten per buffer,
  * but it is disabled by default due to its performance overhead.
  */
-#ifdef LTTNG_RING_BUFFER_COUNT_EVENTS
+#if 1 //def LTTNG_RING_BUFFER_COUNT_EVENTS
 static
 void deliver_count_events(const struct lib_ring_buffer_config *config,
 		struct lib_ring_buffer *buf,
