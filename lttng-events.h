@@ -20,6 +20,7 @@
 #include <lttng-tracer.h>
 #include <lttng-abi.h>
 #include <lttng-abi-old.h>
+#include <linux/irq_work.h>
 
 #define lttng_is_signed_type(type)	(((type)(-1)) < 0)
 
@@ -640,6 +641,12 @@ struct lttng_trigger_group {
 
 	unsigned int syscall_all:1,
 		sys_enter_registered:1;
+	struct lttng_channel_ops *ops;
+	struct lttng_transport *transport;
+	struct channel *chan;		/* Ring buffer channel for trigger group. */
+	struct lib_ring_buffer *buf;	/* Ring buffer for trigger group. */
+	wait_queue_head_t read_wait;
+	struct irq_work wakeup_pending;	/* Pending wakeup irq work. */
 };
 
 struct lttng_metadata_cache {
