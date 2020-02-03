@@ -283,6 +283,8 @@ void lttng_trigger_group_destroy(struct lttng_trigger_group *trigger_group)
 
 	synchronize_trace();	/* Wait for in-flight triggers to complete */
 
+	irq_work_sync(&trigger_group->wakeup_pending);
+
 	list_for_each_entry_safe(trigger_enabler, tmp_trigger_enabler,
 			&trigger_group->enablers_head, node)
 		lttng_trigger_enabler_destroy(trigger_enabler);
@@ -928,6 +930,30 @@ exist:
 type_error:
 full:
 	return ERR_PTR(ret);
+}
+
+static
+void lttng_trigger_send_notification(struct lttng_trigger *trigger)
+{
+	struct lttng_trigger_group *trigger_group = trigger->group;
+	struct lib_ring_buffer_ctx ctx;
+	int ret;
+
+	if (unlikely(!READ_ONCE(trigger->enabled)))
+		return;
+
+	lib_ring_buffer_ctx_init(&ctx, trigger_group->chan, NULL, sizeof(trigger->id),
+			lttng_alignof(trigger->id), -1);
+	ret = trigger_group->ops->event_reserve(&ctx, 0);
+	if (ret < 0) {
+		//TODO: error handling with counter maps
+		//silently drop for now. WARN_ON_ONCE(1);
+		return;
+	}
+	lib_ring_buffer_align_ctx(&ctx, lttng_alignof(trigger->id));
+	trigger_group->ops->event_write(&ctx, &trigger->id, sizeof(trigger->id));
+	trigger_group->ops->event_commit(&ctx);
+	irq_work_queue(&trigger_group->wakeup_pending);
 }
 
 struct lttng_trigger *_lttng_trigger_create(
@@ -1890,13 +1916,6 @@ int lttng_event_enabler_ref_events(struct lttng_event_enabler *event_enabler)
 	}
 	return 0;
 }
-
-void lttng_trigger_send_notification(struct lttng_trigger *trigger)
-{
-	printk(KERN_WARNING "Trigger id: %llu TODO: Implement sending "
-		"notifications\n", trigger->id);
-}
-EXPORT_SYMBOL_GPL(lttng_trigger_send_notification);
 
 /*
  * Create struct lttng_trigger if it is missing and present in the list of

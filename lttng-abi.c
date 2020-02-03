@@ -100,6 +100,14 @@ fd_error:
 }
 
 static
+void trigger_send_notification_work_wakeup(struct irq_work *entry)
+{
+	struct lttng_trigger_group *trigger_group = container_of(entry,
+			struct lttng_trigger_group, wakeup_pending);
+	wake_up_interruptible(&trigger_group->read_wait);
+}
+
+static
 int lttng_abi_create_trigger_group(void)
 {
 	struct lttng_trigger_group *trigger_group;
@@ -124,6 +132,9 @@ int lttng_abi_create_trigger_group(void)
 	}
 
 	trigger_group->file = trigger_group_file;
+	init_waitqueue_head(&trigger_group->read_wait);
+	init_irq_work(&trigger_group->wakeup_pending,
+		      trigger_send_notification_work_wakeup);
 	fd_install(trigger_group_fd, trigger_group_file);
 	return trigger_group_fd;
 

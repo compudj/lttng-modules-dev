@@ -695,8 +695,6 @@ void metadata_cache_destroy(struct kref *kref);
 struct lttng_trigger_group *lttng_trigger_group_create(void);
 void lttng_trigger_group_destroy(struct lttng_trigger_group *trigger_group);
 
-void lttng_trigger_send_notification(struct lttng_trigger *trigger);
-
 struct lttng_channel *lttng_channel_create(struct lttng_session *session,
 				       const char *transport_name,
 				       void *buf_addr,
