@@ -1245,6 +1245,41 @@ nomem:
 }
 
 static
+int lttng_abi_open_trigger_group_stream(struct file *notif_file)
+{
+	struct lttng_trigger_group *trigger_group = notif_file->private_data;
+	struct channel *chan = trigger_group->chan;
+	struct lib_ring_buffer *buf;
+	int ret;
+	void *stream_priv;
+
+	buf = trigger_group->ops->buffer_read_open(chan);
+	if (!buf)
+		return -ENOENT;
+
+	/* The trigger notification fd holds a reference on the trigger group */
+	if (!atomic_long_add_unless(&notif_file->f_count, 1, LONG_MAX)) {
+		ret = -EOVERFLOW;
+		goto refcount_error;
+	}
+	trigger_group->buf = buf;
+	stream_priv = trigger_group;
+	ret = lttng_abi_create_stream_fd(notif_file, stream_priv,
+			&lttng_trigger_group_notif_fops,
+			"[lttng_trigger_stream]");
+	if (ret < 0)
+		goto fd_error;
+
+	return ret;
+
+fd_error:
+	atomic_long_dec(&notif_file->f_count);
+refcount_error:
+	trigger_group->ops->buffer_read_close(buf);
+	return ret;
+}
+
+static
 int lttng_abi_create_event(struct file *channel_file,
 			   struct lttng_kernel_event *event_param)
 {
@@ -1516,46 +1551,12 @@ inval_instr:
 }
 
 static
-int lttng_abi_create_trigger_group_notification_fd(struct file *file)
-{
-	struct lttng_trigger_group *trigger_group = file->private_data;
-	struct file *trigger_group_notif_file;
-	int trigger_notif_fd, ret;
-
-	/* Only allow for a single notification fd per group. */
-	if (trigger_group->notif_file) {
-		return -EBUSY;
-	}
-
-	trigger_notif_fd = lttng_get_unused_fd();
-	if (trigger_notif_fd < 0) {
-		ret = trigger_notif_fd;
-		goto fd_error;
-	}
-	trigger_group_notif_file = anon_inode_getfile("[lttng_trigger_notif]",
-					  &lttng_trigger_group_notif_fops,
-					  trigger_group, O_RDWR);
-	if (IS_ERR(trigger_group_notif_file)) {
-		ret = PTR_ERR(trigger_group_notif_file);
-		goto file_error;
-	}
-	trigger_group->notif_file = trigger_group_notif_file;
-	fd_install(trigger_notif_fd, trigger_group_notif_file);
-	return trigger_notif_fd;
-
-file_error:
-	put_unused_fd(trigger_notif_fd);
-fd_error:
-	return ret;
-}
-
-static
 long lttng_trigger_group_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
 	case LTTNG_KERNEL_TRIGGER_GROUP_NOTIFICATION_FD:
 	{
-		return lttng_abi_create_trigger_group_notification_fd(file);
+		return lttng_abi_open_trigger_group_stream(file);
 	}
 	case LTTNG_KERNEL_TRIGGER_CREATE:
 	{
