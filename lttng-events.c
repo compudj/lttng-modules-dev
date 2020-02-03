@@ -192,22 +192,59 @@ err:
 
 struct lttng_trigger_group *lttng_trigger_group_create(void)
 {
+	struct lttng_transport *transport = NULL;
+	struct lttng_trigger_group *trigger_group;
+	const char *transport_name = "relay-trigger";
+	size_t subbuf_size = 4096;	//TODO
+	size_t num_subbuf = 16;		//TODO
+	unsigned int switch_timer_interval = 0;
+	unsigned int read_timer_interval = 0;
 	int i;
-	struct lttng_trigger_group *trigger_group =
-		lttng_kvzalloc(sizeof(struct lttng_trigger_group), GFP_KERNEL);
-	if (!trigger_group)
-		return NULL;
 
+	mutex_lock(&sessions_mutex);
+
+	transport = lttng_transport_find(transport_name);
+	if (!transport) {
+		printk(KERN_WARNING "LTTng transport %s not found\n",
+		       transport_name);
+		goto notransport;
+	}
+	if (!try_module_get(transport->owner)) {
+		printk(KERN_WARNING "LTT : Can't lock transport module.\n");
+		goto notransport;
+	}
+
+	trigger_group = lttng_kvzalloc(sizeof(struct lttng_trigger_group),
+				       GFP_KERNEL);
+	if (!trigger_group)
+		goto nomem;
+
+	trigger_group->ops = &transport->ops;
+	trigger_group->chan = transport->ops.channel_create(transport_name,
+			trigger_group, NULL, subbuf_size, num_subbuf,
+			switch_timer_interval, read_timer_interval);
+	if (!trigger_group->chan)
+		goto create_error;
+
+	trigger_group->transport = transport;
 	INIT_LIST_HEAD(&trigger_group->enablers_head);
 	INIT_LIST_HEAD(&trigger_group->triggers_head);
 	for (i = 0; i < LTTNG_TRIGGER_HT_SIZE; i++)
 		INIT_HLIST_HEAD(&trigger_group->triggers_ht.table[i]);
 
-	mutex_lock(&sessions_mutex);
 	list_add(&trigger_group->node, &trigger_groups);
 	mutex_unlock(&sessions_mutex);
 
 	return trigger_group;
+
+create_error:
+	lttng_kvfree(trigger_group);
+nomem:
+	if (transport)
+		module_put(transport->owner);
+notransport:
+	mutex_unlock(&sessions_mutex);
+	return NULL;
 }
 
 void metadata_cache_destroy(struct kref *kref)
@@ -293,6 +330,8 @@ void lttng_trigger_group_destroy(struct lttng_trigger_group *trigger_group)
 			&trigger_group->triggers_head, list)
 		_lttng_trigger_destroy(trigger);
 
+	trigger_group->ops->channel_destroy(trigger_group->chan);
+	module_put(trigger_group->transport->owner);
 	list_del(&trigger_group->node);
 	mutex_unlock(&sessions_mutex);
 	lttng_kvfree(trigger_group);
