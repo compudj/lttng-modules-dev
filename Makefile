@@ -34,6 +34,7 @@ ifneq ($(KERNELRELEASE),)
   obj-$(CONFIG_LTTNG) += lttng-ring-buffer-client-discard.o
   obj-$(CONFIG_LTTNG) += lttng-ring-buffer-client-overwrite.o
   obj-$(CONFIG_LTTNG) += lttng-ring-buffer-metadata-client.o
+  obj-$(CONFIG_LTTNG) += lttng-ring-buffer-trigger-client.o
   obj-$(CONFIG_LTTNG) += lttng-ring-buffer-client-mmap-discard.o
   obj-$(CONFIG_LTTNG) += lttng-ring-buffer-client-mmap-overwrite.o
   obj-$(CONFIG_LTTNG) += lttng-ring-buffer-metadata-mmap-client.o
