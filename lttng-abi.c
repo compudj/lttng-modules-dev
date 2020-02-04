@@ -886,7 +886,7 @@ skip_get_next:
 			return -EFAULT;
 		}
 		read_count += copy_len;
-	};
+	}
 	return read_count;
 
 nodata:
