@@ -812,6 +812,10 @@ ssize_t lttng_trigger_group_notif_read(struct file *filp, char __user *user_buf,
 	ssize_t read_count = 0, len;
 	size_t read_offset;
 
+	might_sleep();
+	if (!lttng_access_ok(VERIFY_WRITE, user_buf, count))
+		return -EFAULT;
+
 	/* Finish copy of previous record */
 	if (*ppos != 0) {
 		if (read_count < count) {
