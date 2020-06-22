@@ -1957,13 +1957,33 @@ void lib_ring_buffer_switch_remote_empty(struct lib_ring_buffer *buf)
 }
 EXPORT_SYMBOL_GPL(lib_ring_buffer_switch_remote_empty);
 
+/*
+ * Clearing a ring buffer requires tracing to be stopped.
+ */
 void lib_ring_buffer_clear(struct lib_ring_buffer *buf)
 {
 	struct lib_ring_buffer_backend *bufb = &buf->backend;
 	struct channel *chan = bufb->chan;
+	const struct lib_ring_buffer_config *config = &chan->backend.config;
+	unsigned long offset, idx;
+	size_t subbuf_header_size;
+	u64 tsc;
 
 	lib_ring_buffer_switch_remote(buf);
 	lib_ring_buffer_clear_reader(buf, chan);
+
+	/*
+	 * Write the subbuffer header for first subbuffer after clear so
+	 * we know the total duration of data gathering.
+	 */
+	tsc = config->cb.ring_buffer_clock_read(buf->backend.chan);
+	offset = v_read(config, &buf->offset);
+	idx = subbuf_index(offset, chan);
+	subbuf_header_size = config->cb.subbuffer_header_size();
+	v_add(config, subbuf_header_size, &buf->offset);
+	subbuffer_id_clear_noref(config, &buf->backend.buf_wsb[idx].id);
+	config->cb.buffer_begin(buf, tsc, idx);
+	v_add(config, subbuf_header_size, &buf->commit_hot[idx].cc);
 }
 EXPORT_SYMBOL_GPL(lib_ring_buffer_clear);
 
