@@ -266,6 +266,8 @@ long lib_ring_buffer_ioctl(struct file *filp, unsigned int cmd,
 	case RING_BUFFER_CLEAR:
 		lib_ring_buffer_clear(buf);
 		return 0;
+	case RING_BUFFER_BEGIN_EMPTY:
+		return lib_ring_buffer_begin_empty(buf);
 	default:
 		return -ENOIOCTLCMD;
 	}
@@ -420,6 +422,8 @@ long lib_ring_buffer_compat_ioctl(struct file *filp, unsigned int cmd,
 	case RING_BUFFER_COMPAT_CLEAR:
 		lib_ring_buffer_clear(buf);
 		return 0;
+	case RING_BUFFER_COMPAT_BEGIN_EMPTY:
+		return lib_ring_buffer_begin_empty(buf);
 	default:
 		return -ENOIOCTLCMD;
 	}

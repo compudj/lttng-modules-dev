@@ -138,8 +138,8 @@ int lib_ring_buffer_reserve_slow(struct lib_ring_buffer_ctx *ctx,
 		void *client_ctx);
 
 extern
-void lib_ring_buffer_switch_slow(struct lib_ring_buffer *buf,
-				 enum switch_mode mode);
+int lib_ring_buffer_switch_slow(struct lib_ring_buffer *buf,
+				enum switch_mode mode);
 
 extern
 void lib_ring_buffer_check_deliver_slow(const struct lib_ring_buffer_config *config,
@@ -156,6 +156,8 @@ extern
 void lib_ring_buffer_switch_remote_empty(struct lib_ring_buffer *buf);
 extern
 void lib_ring_buffer_clear(struct lib_ring_buffer *buf);
+extern
+int lib_ring_buffer_begin_empty(struct lib_ring_buffer *buf);
 
 /* Buffer write helpers */
 

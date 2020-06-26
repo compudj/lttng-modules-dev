@@ -200,7 +200,7 @@ slow_path:
  * lib_ring_buffer_switch - Perform a sub-buffer switch for a per-cpu buffer.
  * @config: ring buffer instance configuration.
  * @buf: buffer
- * @mode: buffer switch mode (SWITCH_ACTIVE or SWITCH_FLUSH)
+ * @mode: buffer switch mode (SWITCH_ACTIVE, SWITCH_FLUSH, or BEGIN_EMPTY)
  *
  * This operation is completely reentrant : can be called while tracing is
  * active with absolutely no lock held.
@@ -211,10 +211,10 @@ slow_path:
  * disabled, for RING_BUFFER_SYNC_PER_CPU configuration.
  */
 static inline
-void lib_ring_buffer_switch(const struct lib_ring_buffer_config *config,
+int lib_ring_buffer_switch(const struct lib_ring_buffer_config *config,
 			    struct lib_ring_buffer *buf, enum switch_mode mode)
 {
-	lib_ring_buffer_switch_slow(buf, mode);
+	return lib_ring_buffer_switch_slow(buf, mode);
 }
 
 /* See ring_buffer_frontend_api.h for lib_ring_buffer_reserve(). */

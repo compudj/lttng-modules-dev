@@ -924,6 +924,10 @@ long lttng_metadata_ring_buffer_ioctl(struct file *filp,
 		}
 		break;
 	}
+	case RING_BUFFER_BEGIN_EMPTY:
+	{
+		return -ENOSYS;
+	}
 	default:
 		break;
 	}
@@ -1032,6 +1036,10 @@ long lttng_metadata_ring_buffer_compat_ioctl(struct file *filp,
 			goto err;
 		}
 		break;
+	}
+	case RING_BUFFER_BEGIN_EMPTY:
+	{
+		return -ENOSYS;
 	}
 	default:
 		break;

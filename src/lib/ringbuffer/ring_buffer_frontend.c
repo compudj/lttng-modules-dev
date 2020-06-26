@@ -82,8 +82,10 @@ static
 void lib_ring_buffer_print_errors(struct channel *chan,
 				  struct lib_ring_buffer *buf, int cpu);
 static
-void _lib_ring_buffer_switch_remote(struct lib_ring_buffer *buf,
-		enum switch_mode mode);
+int _lib_ring_buffer_switch_remote(struct lib_ring_buffer *buf,
+				   enum switch_mode mode);
+static
+int _lib_ring_buffer_begin_empty(struct lib_ring_buffer *buf);
 
 static
 int lib_ring_buffer_poll_deliver(const struct lib_ring_buffer_config *config,
@@ -325,7 +327,7 @@ static void switch_buffer_timer(LTTNG_TIMER_FUNC_ARG_TYPE t)
 	 * Only flush buffers periodically if readers are active.
 	 */
 	if (atomic_long_read(&buf->active_readers))
-		lib_ring_buffer_switch_slow(buf, SWITCH_ACTIVE);
+		(void) lib_ring_buffer_switch_slow(buf, SWITCH_ACTIVE);
 
 	if (config->alloc == RING_BUFFER_ALLOC_PER_CPU)
 		lttng_mod_timer_pinned(&buf->switch_timer,
@@ -486,7 +488,7 @@ int lttng_cpuhp_rb_frontend_dead(unsigned int cpu,
 	 * CPU stopped running completely. Ensures that all data
 	 * from that remote CPU is flushed.
 	 */
-	lib_ring_buffer_switch_slow(buf, SWITCH_ACTIVE);
+	(void) lib_ring_buffer_switch_slow(buf, SWITCH_ACTIVE);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(lttng_cpuhp_rb_frontend_dead);
@@ -576,7 +578,7 @@ int lib_ring_buffer_cpu_hp_callback(struct notifier_block *nb,
 		 * CPU stopped running completely. Ensures that all data
 		 * from that remote CPU is flushed.
 		 */
-		lib_ring_buffer_switch_slow(buf, SWITCH_ACTIVE);
+		(void) lib_ring_buffer_switch_slow(buf, SWITCH_ACTIVE);
 		return NOTIFY_OK;
 
 	default:
@@ -631,7 +633,7 @@ static int notrace ring_buffer_tick_nohz_callback(struct notifier_block *nb,
 			wake_up_interruptible(&chan->read_wait);
 		}
 		if (chan->switch_timer_interval)
-			lib_ring_buffer_switch_slow(buf, SWITCH_ACTIVE);
+			(void) lib_ring_buffer_switch_slow(buf, SWITCH_ACTIVE);
 		raw_spin_unlock(&buf->raw_tick_nohz_spinlock);
 		break;
 	case TICK_NOHZ_STOP:
@@ -741,7 +743,7 @@ static void lib_ring_buffer_set_quiescent(struct lib_ring_buffer *buf)
 {
 	if (!buf->quiescent) {
 		buf->quiescent = true;
-		_lib_ring_buffer_switch_remote(buf, SWITCH_FLUSH);
+		(void) _lib_ring_buffer_switch_remote(buf, SWITCH_FLUSH);
 	}
 }
 
@@ -1748,6 +1750,15 @@ int lib_ring_buffer_try_switch_slow(enum switch_mode mode,
 	offsets->begin = v_read(config, &buf->offset);
 	offsets->old = offsets->begin;
 	offsets->switch_old_start = 0;
+	switch (mode) {
+	case BEGIN_EMPTY:
+		offsets->switch_old_end = 0;
+		break;
+	case SWITCH_ACTIVE:
+	case SWITCH_FLUSH:
+		offsets->switch_old_end = 1;
+		break;
+	}
 	off = subbuf_offset(offsets->begin, chan);
 
 	*tsc = config->cb.ring_buffer_clock_read(chan);
@@ -1768,22 +1779,40 @@ int lib_ring_buffer_try_switch_slow(enum switch_mode mode,
 	 * (records and header timestamps) are visible to the reader. This is
 	 * required for quiescence guarantees for the fusion merge.
 	 */
-	if (mode != SWITCH_FLUSH && !off)
-		return -1;	/* we do not have to switch : buffer is empty */
+	switch (mode) {
+	case BEGIN_EMPTY:
+		if (!config->cb.subbuffer_header_size()) {
+			/* The ring buffer client implements an empty packet header. */
+			return -ENOENT;
+		}
+		if (off) {
+			/*
+			 * Current packet is not empty, headers already populated
+			 * with timestamp begin.
+			 */
+			return -EEXIST;
+		}
+		break;
+	case SWITCH_ACTIVE:
+		if (!off) {
+			/* We do not have to switch: buffer is empty. */
+			return -EEXIST;
+		}
+		break;
+	case SWITCH_FLUSH:
+		if (!off && !config->cb.subbuffer_header_size()) {
+			/*
+			 * The client does not save any header information.
+			 * Don't switch empty subbuffer, because it is invalid
+			 * to deliver a completely empty subbuffer.
+			 */
+			return -ENOENT;
+		}
+		break;
+	}
 
-	if (unlikely(off == 0)) {
+	if (!off) {
 		unsigned long sb_index, commit_count;
-
-		/*
-		 * We are performing a SWITCH_FLUSH. At this stage, there are no
-		 * concurrent writes into the buffer.
-		 *
-		 * The client does not save any header information.  Don't
-		 * switch empty subbuffer on finalize, because it is invalid to
-		 * deliver a completely empty subbuffer.
-		 */
-		if (!config->cb.subbuffer_header_size())
-			return -1;
 
 		/* Test new buffer integrity */
 		sb_index = subbuf_index(offsets->begin, chan);
@@ -1804,7 +1833,7 @@ int lib_ring_buffer_try_switch_slow(enum switch_mode mode,
 				 * We do not overwrite non consumed buffers
 				 * and we are full : don't switch.
 				 */
-				return -1;
+				return -ENOBUFS;
 			} else {
 				/*
 				 * Next subbuffer not being written to, and we
@@ -1821,7 +1850,7 @@ int lib_ring_buffer_try_switch_slow(enum switch_mode mode,
 			 * either a writer OOPS or too many nested writes over a
 			 * reserve/commit pair.
 			 */
-			return -1;
+			return -EIO;
 		}
 
 		/*
@@ -1829,8 +1858,16 @@ int lib_ring_buffer_try_switch_slow(enum switch_mode mode,
 		 */
 		offsets->switch_old_start = 1;
 	}
-	offsets->begin = subbuf_align(offsets->begin, chan);
-	/* Note: old points to the next subbuf at offset 0 */
+	switch (mode) {
+	case BEGIN_EMPTY:
+		offsets->begin += config->cb.subbuffer_header_size();
+		break;
+	case SWITCH_ACTIVE:
+	case SWITCH_FLUSH:
+		/* Note: begin points to the next subbuf at offset 0 */
+		offsets->begin = subbuf_align(offsets->begin, chan);
+		break;
+	}
 	offsets->end = offsets->begin;
 	return 0;
 }
@@ -1843,7 +1880,7 @@ int lib_ring_buffer_try_switch_slow(enum switch_mode mode,
  * operations, this function must be called from the CPU which owns the buffer
  * for a ACTIVE flush.
  */
-void lib_ring_buffer_switch_slow(struct lib_ring_buffer *buf, enum switch_mode mode)
+int lib_ring_buffer_switch_slow(struct lib_ring_buffer *buf, enum switch_mode mode)
 {
 	struct channel *chan = buf->backend.chan;
 	const struct lib_ring_buffer_config *config = &chan->backend.config;
@@ -1857,9 +1894,12 @@ void lib_ring_buffer_switch_slow(struct lib_ring_buffer *buf, enum switch_mode m
 	 * Perform retryable operations.
 	 */
 	do {
-		if (lib_ring_buffer_try_switch_slow(mode, buf, chan, &offsets,
-						    &tsc))
-			return;	/* Switch not needed */
+		int ret;
+
+		ret = lib_ring_buffer_try_switch_slow(mode, buf, chan, &offsets,
+						      &tsc);
+		if (ret)
+			return ret;	/* Switch not needed */
 	} while (v_cmpxchg(config, &buf->offset, offsets.old, offsets.end)
 		 != offsets.old);
 
@@ -1890,13 +1930,16 @@ void lib_ring_buffer_switch_slow(struct lib_ring_buffer *buf, enum switch_mode m
 	/*
 	 * Switch old subbuffer.
 	 */
-	lib_ring_buffer_switch_old_end(buf, chan, &offsets, tsc);
+	if (offsets.switch_old_end)
+		lib_ring_buffer_switch_old_end(buf, chan, &offsets, tsc);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(lib_ring_buffer_switch_slow);
 
 struct switch_param {
 	struct lib_ring_buffer *buf;
 	enum switch_mode mode;
+	int ret;
 };
 
 static void remote_switch(void *info)
@@ -1904,10 +1947,10 @@ static void remote_switch(void *info)
 	struct switch_param *param = info;
 	struct lib_ring_buffer *buf = param->buf;
 
-	lib_ring_buffer_switch_slow(buf, param->mode);
+	param->ret = lib_ring_buffer_switch_slow(buf, param->mode);
 }
 
-static void _lib_ring_buffer_switch_remote(struct lib_ring_buffer *buf,
+static int _lib_ring_buffer_switch_remote(struct lib_ring_buffer *buf,
 		enum switch_mode mode)
 {
 	struct channel *chan = buf->backend.chan;
@@ -1919,8 +1962,7 @@ static void _lib_ring_buffer_switch_remote(struct lib_ring_buffer *buf,
 	 * With global synchronization we don't need to use the IPI scheme.
 	 */
 	if (config->sync == RING_BUFFER_SYNC_GLOBAL) {
-		lib_ring_buffer_switch_slow(buf, mode);
-		return;
+		return lib_ring_buffer_switch_slow(buf, mode);
 	}
 
 	/*
@@ -1938,31 +1980,40 @@ static void _lib_ring_buffer_switch_remote(struct lib_ring_buffer *buf,
 				 remote_switch, &param, 1);
 	if (ret) {
 		/* Remote CPU is offline, do it ourself. */
-		lib_ring_buffer_switch_slow(buf, mode);
+		ret = lib_ring_buffer_switch_slow(buf, mode);
+	} else {
+		ret = param.ret;
 	}
 	preempt_enable();
+	return ret;
 }
 
 /* Switch sub-buffer if current sub-buffer is non-empty. */
 void lib_ring_buffer_switch_remote(struct lib_ring_buffer *buf)
 {
-	_lib_ring_buffer_switch_remote(buf, SWITCH_ACTIVE);
+	(void) _lib_ring_buffer_switch_remote(buf, SWITCH_ACTIVE);
 }
 EXPORT_SYMBOL_GPL(lib_ring_buffer_switch_remote);
 
 /* Switch sub-buffer even if current sub-buffer is empty. */
 void lib_ring_buffer_switch_remote_empty(struct lib_ring_buffer *buf)
 {
-	_lib_ring_buffer_switch_remote(buf, SWITCH_FLUSH);
+	(void) _lib_ring_buffer_switch_remote(buf, SWITCH_FLUSH);
 }
 EXPORT_SYMBOL_GPL(lib_ring_buffer_switch_remote_empty);
+
+int lib_ring_buffer_begin_empty(struct lib_ring_buffer *buf)
+{
+	return _lib_ring_buffer_switch_remote(buf, BEGIN_EMPTY);
+}
+EXPORT_SYMBOL_GPL(lib_ring_buffer_begin_empty);
 
 void lib_ring_buffer_clear(struct lib_ring_buffer *buf)
 {
 	struct lib_ring_buffer_backend *bufb = &buf->backend;
 	struct channel *chan = bufb->chan;
 
-	lib_ring_buffer_switch_remote(buf);
+	(void) lib_ring_buffer_switch_remote(buf);
 	lib_ring_buffer_clear_reader(buf, chan);
 }
 EXPORT_SYMBOL_GPL(lib_ring_buffer_clear);

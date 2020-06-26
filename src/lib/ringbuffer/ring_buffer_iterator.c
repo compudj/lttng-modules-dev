@@ -62,7 +62,7 @@ restart:
 			 * of the buffers rather than letting the reader "pull"
 			 * data from the buffer.
 			 */
-			lib_ring_buffer_switch_slow(buf, SWITCH_ACTIVE);
+			(void) lib_ring_buffer_switch_slow(buf, SWITCH_ACTIVE);
 			ret = lib_ring_buffer_get_next_subbuf(buf);
 		}
 		if (ret)

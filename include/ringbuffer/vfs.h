@@ -121,6 +121,19 @@ ssize_t vfs_lib_ring_buffer_splice_read(struct file *in, loff_t *ppos,
  */
 #define RING_BUFFER_GET_NEXT_SUBBUF_METADATA_CHECK	_IOR(0xF6, 0x12, uint32_t)
 
+/*
+ * Ensure the packet header is populated with a begin timestamp for the current
+ * packet.
+ *
+ * Returns 0 on success, -ENOENT if the ring buffer client implements an
+ * empty packet header, -EEXIST if the packet header begin timestamp is
+ * already populated for the current packet (current packet is therefore not
+ * empty), or -ENOBUFS if there is no space available in the buffer to write
+ * the header.
+
+ */
+#define RING_BUFFER_BEGIN_EMPTY			_IO(0xF6, 0x13)
+
 #ifdef CONFIG_COMPAT
 /* Get a snapshot of the current ring buffer producer and consumer positions */
 #define RING_BUFFER_COMPAT_SNAPSHOT		RING_BUFFER_SNAPSHOT
@@ -174,6 +187,19 @@ ssize_t vfs_lib_ring_buffer_splice_read(struct file *in, loff_t *ppos,
  */
 #define RING_BUFFER_COMPAT_GET_NEXT_SUBBUF_METADATA_CHECK \
 	RING_BUFFER_GET_NEXT_SUBBUF_METADATA_CHECK
+
+/*
+ * Ensure the packet header is populated with a begin timestamp for the current
+ * packet.
+ *
+ * Returns 0 on success, -ENOENT if the ring buffer client implements an
+ * empty packet header, -EEXIST if the packet header begin timestamp is
+ * already populated for the current packet (current packet is therefore not
+ * empty), or -ENOBUFS if there is no space available in the buffer to write
+ * the header.
+ */
+#define RING_BUFFER_COMPAT_BEGIN_EMPTY	RING_BUFFER_BEGIN_EMPTY
+
 #endif /* CONFIG_COMPAT */
 
 #endif /* _LIB_RING_BUFFER_VFS_H */

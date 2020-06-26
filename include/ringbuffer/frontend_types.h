@@ -22,7 +22,7 @@
  * A switch is done during tracing or as a final flush after tracing (so it
  * won't write in the new sub-buffer).
  */
-enum switch_mode { SWITCH_ACTIVE, SWITCH_FLUSH };
+enum switch_mode { SWITCH_ACTIVE, SWITCH_FLUSH, BEGIN_EMPTY };
 
 /* channel-level read-side iterator */
 struct channel_iter {
