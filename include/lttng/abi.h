@@ -11,6 +11,7 @@
 #define _LTTNG_ABI_H
 
 #include <linux/fs.h>
+#include <linux/types.h>
 
 /*
  * Major/minor version of ABI exposed to lttng tools. Major number
@@ -140,6 +141,7 @@ struct lttng_kernel_event {
 #define LTTNG_KERNEL_TRIGGER_PADDING2	LTTNG_KERNEL_SYM_NAME_LEN + 32
 struct lttng_kernel_trigger {
 	uint64_t id;
+	uint64_t error_counter_index;
 	char name[LTTNG_KERNEL_SYM_NAME_LEN];	/* event name */
 	uint32_t instrumentation;		/* enum lttng_kernel_instrumentation */
 	char padding[LTTNG_KERNEL_TRIGGER_PADDING1];
@@ -152,6 +154,38 @@ struct lttng_kernel_trigger {
 		struct lttng_kernel_uprobe uprobe;
 		char padding[LTTNG_KERNEL_TRIGGER_PADDING2];
 	} u;
+} __attribute__((packed));
+
+enum lttng_kernel_counter_arithmetic {
+    LTTNG_KERNEL_COUNTER_ARITHMETIC_MODULAR = 1,
+};
+
+enum lttng_kernel_counter_bitness {
+    LTTNG_KERNEL_COUNTER_BITNESS_32BITS = 1,
+    LTTNG_KERNEL_COUNTER_BITNESS_64BITS = 2,
+};
+
+struct lttng_kernel_counter_dimension {
+	uint64_t size;
+	uint64_t underflow_index;
+	uint64_t overflow_index;
+	uint8_t has_underflow;
+	uint8_t has_overflow;
+} __attribute__((packed));
+
+#define LTTNG_KERNEL_COUNTER_DIMENSION_MAX 8
+struct lttng_kernel_counter_conf {
+	uint32_t arithmetic;	/* enum lttng_kernel_counter_arithmetic */
+	uint32_t bitness;	/* enum lttng_kernel_counter_bitness */
+	uint32_t number_dimensions;
+	int64_t global_sum_step;
+	struct lttng_kernel_counter_dimension dimensions[LTTNG_KERNEL_COUNTER_DIMENSION_MAX];
+} __attribute__((packed));
+
+struct lttng_kernel_counter_value {
+	uint32_t number_dimensions;
+	uint64_t dimension_indexes[LTTNG_KERNEL_COUNTER_DIMENSION_MAX];
+	int64_t value;
 } __attribute__((packed));
 
 #define LTTNG_KERNEL_TRIGGER_NOTIFICATION_PADDING 32
@@ -301,9 +335,17 @@ struct lttng_kernel_tracker_args {
 /* Trigger group file descriptor ioctl */
 #define LTTNG_KERNEL_TRIGGER_GROUP_NOTIFICATION_FD \
 	_IO(0xF6, 0x30)
+
 #define LTTNG_KERNEL_TRIGGER_CREATE		\
 	_IOW(0xF6, 0x31, struct lttng_kernel_trigger)
+
 #define LTTNG_KERNEL_CAPTURE _IO(0xF6, 0x32)
+
+#define LTTNG_KERNEL_COUNTER \
+	_IOW(0xF6, 0x33, struct lttng_kernel_counter_conf)
+
+#define LTTNG_KERNEL_COUNTER_VALUE \
+	_IOWR(0xF6, 0x34, struct lttng_kernel_counter_value)
 
 /* Session FD ioctl */
 /* lttng/abi-old.h reserve 0x50, 0x51, 0x52, and 0x53. */

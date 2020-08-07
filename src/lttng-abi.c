@@ -59,6 +59,8 @@ static const struct proc_ops lttng_proc_ops;
 static const struct file_operations lttng_proc_ops;
 #endif
 
+static DEFINE_MUTEX(trigger_group_mutex);
+
 static const struct file_operations lttng_session_fops;
 static const struct file_operations lttng_trigger_group_fops;
 static const struct file_operations lttng_channel_fops;
@@ -594,6 +596,72 @@ int lttng_abi_session_set_creation_time(struct lttng_session *session,
 	strcpy(session->creation_time, time->iso8601);
 	return 0;
 }
+
+static
+int lttng_counter_release(struct inode *inode, struct file *file)
+{
+	struct lttng_counter *counter = file->private_data;
+
+	if (counter) {
+		/*
+		 * Do not destroy the counter itself. Wait of the owner
+		 * (trigger group) to be destroyed.
+		 */
+		fput(counter->owner);
+	}
+
+	return 0;
+}
+
+static
+long lttng_counter_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+	struct lttng_counter *counter = file->private_data;
+	size_t indexes[LTTNG_KERNEL_COUNTER_DIMENSION_MAX] = {0};
+	int i;
+
+	switch (cmd) {
+	case LTTNG_KERNEL_COUNTER_VALUE:
+	{
+		struct lttng_kernel_counter_value local_counter_value;
+		struct lttng_kernel_counter_value __user *ucounter_value =
+				(struct lttng_kernel_counter_value __user *) arg;
+		int64_t value;
+		int ret;
+
+		if (copy_from_user(&local_counter_value, ucounter_value,
+					sizeof(local_counter_value)))
+			return -EFAULT;
+
+		/* Cast all indexes into size_t. */
+		for (i = 0; i < local_counter_value.number_dimensions; i++) {
+			indexes[i] = (size_t) local_counter_value.dimension_indexes[i];
+		}
+
+		ret = lttng_kernel_counter_value(counter, indexes, &value);
+		if (ret)
+			return -EFAULT;
+
+		if (copy_to_user(&ucounter_value->value, &value, sizeof(int64_t)))
+			return -EFAULT;
+
+		return 0;
+	}
+	default:
+		WARN_ON_ONCE(1);
+		return -ENOSYS;
+	}
+}
+
+static const struct file_operations lttng_counter_fops = {
+	.owner = THIS_MODULE,
+	.release = lttng_counter_release,
+	.unlocked_ioctl = lttng_counter_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = lttng_counter_ioctl,
+#endif
+};
+
 
 static
 enum tracker_type get_tracker_type(struct lttng_kernel_tracker_args *tracker)
@@ -1895,6 +1963,7 @@ int lttng_abi_create_trigger(struct file *trigger_group_file,
 		 * will stay invariant for the rest of the session.
 		 */
 		trigger = lttng_trigger_create(NULL, trigger_param->id,
+			trigger_param->error_counter_index,
 			trigger_group, trigger_param, NULL,
 			trigger_param->instrumentation);
 		WARN_ON_ONCE(!trigger);
@@ -1920,6 +1989,95 @@ inval_instr:
 }
 
 static
+long lttng_abi_trigger_group_create_error_counter(
+		struct file *trigger_group_file,
+		const struct lttng_kernel_counter_conf *error_counter_conf)
+{
+	int counter_fd, ret;
+	char *counter_transport_name;
+	size_t counter_len;
+	struct lttng_counter *counter = NULL;
+	struct file *counter_file;
+	struct lttng_trigger_group *trigger_group =
+			(struct lttng_trigger_group *) trigger_group_file->private_data;
+
+	if (error_counter_conf->arithmetic != LTTNG_KERNEL_COUNTER_ARITHMETIC_MODULAR) {
+		printk(KERN_ERR "LTTng: Trigger: Error counter of the wrong arithmetic type.\n");
+		return -EINVAL;
+	}
+
+	if (error_counter_conf->number_dimensions != 1) {
+		printk(KERN_ERR "LTTng: Trigger: Error counter has more than one dimension.\n");
+		return -EINVAL;
+	}
+
+	switch (error_counter_conf->bitness) {
+	case LTTNG_KERNEL_COUNTER_BITNESS_64BITS:
+		counter_transport_name = "counter-per-cpu-64-modular";
+		break;
+	case LTTNG_KERNEL_COUNTER_BITNESS_32BITS:
+		counter_transport_name = "counter-per-cpu-32-modular";
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	mutex_lock(&trigger_group_mutex);
+
+	counter_fd = lttng_get_unused_fd();
+	if (counter_fd < 0) {
+		ret = counter_fd;
+		goto fd_error;
+	}
+
+	/* FIXME: Does it need to be RDWR ?*/
+	counter_file = anon_inode_getfile("[lttng_counter]",
+				       &lttng_counter_fops,
+				       NULL, O_RDWR);
+	if (IS_ERR(counter_file)) {
+		ret = PTR_ERR(counter_file);
+		goto file_error;
+	}
+
+	counter_len = error_counter_conf->dimensions[0].size;
+
+	if (!atomic_long_add_unless(&trigger_group_file->f_count, 1, LONG_MAX)) {
+		ret = -EOVERFLOW;
+		goto refcount_error;
+	}
+
+	counter = lttng_kernel_counter_create(counter_transport_name,
+			1, &counter_len);
+	if (!counter) {
+		ret = -EINVAL;
+		goto counter_error;
+	}
+
+	trigger_group->error_counter = counter;
+	trigger_group->error_counter_len = counter_len;
+
+	counter->file = counter_file;
+	counter->owner = trigger_group->file;
+	counter_file->private_data = counter;
+	/* Ownership transferred. */
+	counter = NULL;
+
+	fd_install(counter_fd, counter_file);
+	mutex_unlock(&trigger_group_mutex);
+
+	return counter_fd;
+
+counter_error:
+	atomic_long_dec(&trigger_group_file->f_count);
+refcount_error:
+	fput(counter_file);
+file_error:
+	put_unused_fd(counter_fd);
+fd_error:
+	return ret;
+}
+
+static
 long lttng_trigger_group_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
@@ -1936,6 +2094,17 @@ long lttng_trigger_group_ioctl(struct file *file, unsigned int cmd, unsigned lon
 				sizeof(utrigger_param)))
 			return -EFAULT;
 		return lttng_abi_create_trigger(file, &utrigger_param);
+	}
+	case LTTNG_KERNEL_COUNTER:
+	{
+		struct lttng_kernel_counter_conf uerror_counter_conf;
+
+		if (copy_from_user(&uerror_counter_conf,
+				(struct lttng_kernel_counter_conf __user *) arg,
+				sizeof(uerror_counter_conf)))
+			return -EFAULT;
+		return lttng_abi_trigger_group_create_error_counter(file,
+				&uerror_counter_conf);
 	}
 	default:
 		return -ENOIOCTLCMD;

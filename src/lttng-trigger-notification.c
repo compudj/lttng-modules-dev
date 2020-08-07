@@ -344,6 +344,23 @@ end:
 }
 
 static
+void record_error(struct lttng_trigger *trigger)
+{
+
+	struct lttng_trigger_group *trigger_group = trigger->group;
+	size_t dimension_index[1];
+	int ret;
+
+	dimension_index[0] = trigger->error_counter_index;
+
+	ret = trigger_group->error_counter->ops->counter_add(
+			trigger_group->error_counter->counter,
+			dimension_index, 1);
+	if (ret)
+		WARN_ON_ONCE(1);
+}
+
+static
 void notification_send(struct lttng_trigger_notification *notif,
 		struct lttng_trigger *trigger)
 {
@@ -371,11 +388,10 @@ void notification_send(struct lttng_trigger_notification *notif,
 			lttng_alignof(kernel_notif), -1);
 	ret = trigger_group->ops->event_reserve(&ctx, 0);
 	if (ret < 0) {
-		//TODO: error handling with counter maps
-		//silently drop for now.
-		WARN_ON_ONCE(1);
+		record_error(trigger);
 		return;
 	}
+
 	lib_ring_buffer_align_ctx(&ctx, lttng_alignof(kernel_notif));
 
 	/* Write the notif structure. */
