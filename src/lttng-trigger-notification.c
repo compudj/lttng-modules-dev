@@ -371,7 +371,7 @@ void notification_send(struct lttng_trigger_notification *notif,
 	int ret;
 
 	reserve_size = sizeof(kernel_notif);
-	kernel_notif.id = trigger->id;
+	kernel_notif.token = trigger->user_token;
 
 	if (notif->has_captures) {
 		capture_buffer_content_len = notif->writer.write_pos - notif->writer.buffer;

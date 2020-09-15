@@ -119,11 +119,12 @@ struct lttng_kernel_syscall {
 /*
  * For syscall tracing, name = "*" means "enable all".
  */
-#define LTTNG_KERNEL_EVENT_PADDING1	16
+#define LTTNG_KERNEL_EVENT_PADDING1	8
 #define LTTNG_KERNEL_EVENT_PADDING2	LTTNG_KERNEL_SYM_NAME_LEN + 32
 struct lttng_kernel_event {
 	char name[LTTNG_KERNEL_SYM_NAME_LEN];	/* event name */
 	uint32_t instrumentation;		/* enum lttng_kernel_instrumentation */
+	uint64_t token;				/* User-provided token */
 	char padding[LTTNG_KERNEL_EVENT_PADDING1];
 
 	/* Per instrumentation type configuration */
@@ -137,10 +138,42 @@ struct lttng_kernel_event {
 	} u;
 } __attribute__((packed));
 
+enum lttng_kernel_key_token_type {
+	LTTNG_KERNEL_KEY_TOKEN_STRING = 0,	/* arg: strtab_offset. */
+	LTTNG_KERNEL_KEY_TOKEN_EVENT = 1,	/* no arg. */
+};
+
+#define LTTNG_KERNEL_KEY_ARG_PADDING1		60
+#define LTTNG_KERNEL_KEY_TOKEN_STRING_LEN_MAX	256
+struct lttng_kernel_key_token {
+	uint32_t type;	/* enum lttng_kernel_key_token_type */
+	union {
+		uint64_t string_ptr;
+		char padding[LTTNG_KERNEL_KEY_ARG_PADDING1];
+	} arg;
+} __attribute__((packed));
+
+#define LTTNG_KERNEL_NR_KEY_TOKEN 4
+struct lttng_kernel_counter_key_dimension {
+	uint32_t nr_key_tokens;
+	struct lttng_kernel_key_token key_tokens[LTTNG_KERNEL_NR_KEY_TOKEN];
+} __attribute__((packed));
+
+#define LTTNG_KERNEL_COUNTER_DIMENSION_MAX 4
+#define LTTNG_KERNEL_COUNTER_EVENT_PADDING1	16
+struct lttng_kernel_counter_event {
+	struct lttng_kernel_event event;
+
+	uint32_t nr_dimensions;
+	struct lttng_kernel_counter_key_dimension key_dimensions[LTTNG_KERNEL_COUNTER_DIMENSION_MAX];
+
+	char padding[LTTNG_KERNEL_COUNTER_EVENT_PADDING1];
+} __attribute__((packed));
+
 #define LTTNG_KERNEL_TRIGGER_PADDING1	16
 #define LTTNG_KERNEL_TRIGGER_PADDING2	LTTNG_KERNEL_SYM_NAME_LEN + 32
 struct lttng_kernel_trigger {
-	uint64_t id;
+	uint64_t token;
 	uint64_t error_counter_index;
 	char name[LTTNG_KERNEL_SYM_NAME_LEN];	/* event name */
 	uint32_t instrumentation;		/* enum lttng_kernel_instrumentation */
@@ -173,7 +206,6 @@ struct lttng_kernel_counter_dimension {
 	uint8_t has_overflow;
 } __attribute__((packed));
 
-#define LTTNG_KERNEL_COUNTER_DIMENSION_MAX 8
 struct lttng_kernel_counter_conf {
 	uint32_t arithmetic;	/* enum lttng_kernel_counter_arithmetic */
 	uint32_t bitness;	/* enum lttng_kernel_counter_bitness */
@@ -182,15 +214,59 @@ struct lttng_kernel_counter_conf {
 	struct lttng_kernel_counter_dimension dimensions[LTTNG_KERNEL_COUNTER_DIMENSION_MAX];
 } __attribute__((packed));
 
-struct lttng_kernel_counter_value {
+struct lttng_kernel_counter_index {
 	uint32_t number_dimensions;
 	uint64_t dimension_indexes[LTTNG_KERNEL_COUNTER_DIMENSION_MAX];
+} __attribute__((packed));
+
+struct lttng_kernel_counter_value {
 	int64_t value;
+	uint8_t underflow;
+	uint8_t overflow;
+} __attribute__((packed));
+
+#define LTTNG_KERNEL_COUNTER_READ_PADDING 32
+struct lttng_kernel_counter_read {
+	struct lttng_kernel_counter_index index;
+	int32_t cpu;	/* -1 for global counter, >= 0 for specific cpu. */
+	struct lttng_kernel_counter_value value;	/* output */
+	char padding[LTTNG_KERNEL_COUNTER_READ_PADDING];
+} __attribute__((packed));
+
+#define LTTNG_KERNEL_COUNTER_AGGREGATE_PADDING 32
+struct lttng_kernel_counter_aggregate {
+	struct lttng_kernel_counter_index index;
+	struct lttng_kernel_counter_value value;	/* output */
+	char padding[LTTNG_KERNEL_COUNTER_AGGREGATE_PADDING];
+} __attribute__((packed));
+
+#define LTTNG_KERNEL_COUNTER_CLEAR_PADDING 32
+struct lttng_kernel_counter_clear {
+	struct lttng_kernel_counter_index index;
+	char padding[LTTNG_KERNEL_COUNTER_CLEAR_PADDING];
+} __attribute__((packed));
+
+#define LTTNG_KERNEL_COUNTER_MAP_NR_DESCRIPTORS_PADDING 32
+struct lttng_kernel_counter_map_nr_descriptors {
+	uint64_t nr_descriptors;
+};
+
+#define LTTNG_KERNEL_COUNTER_KEY_LEN 256
+#define LTTNG_KERNEL_COUNTER_MAP_DESCRIPTOR_PADDING 32
+struct lttng_kernel_counter_map_descriptor {
+	uint64_t descriptor_index;	/* input. [ 0 .. nr_descriptors - 1 ] */
+
+	uint32_t dimension;		/* outputs */
+	uint64_t array_index;
+	uint64_t user_token;
+	char key[LTTNG_KERNEL_COUNTER_KEY_LEN];
+
+	char padding[LTTNG_KERNEL_COUNTER_MAP_DESCRIPTOR_PADDING];
 } __attribute__((packed));
 
 #define LTTNG_KERNEL_TRIGGER_NOTIFICATION_PADDING 32
 struct lttng_kernel_trigger_notification {
-	uint64_t id;
+	uint64_t token;
 	uint16_t capture_buf_size;
 	char padding[LTTNG_KERNEL_TRIGGER_NOTIFICATION_PADDING];
 } __attribute__((packed));
@@ -332,21 +408,6 @@ struct lttng_kernel_tracker_args {
 	_IOR(0xF6, 0x4B, struct lttng_kernel_tracer_abi_version)
 #define LTTNG_KERNEL_TRIGGER_GROUP_CREATE	_IO(0xF6, 0x4C)
 
-/* Trigger group file descriptor ioctl */
-#define LTTNG_KERNEL_TRIGGER_GROUP_NOTIFICATION_FD \
-	_IO(0xF6, 0x30)
-
-#define LTTNG_KERNEL_TRIGGER_CREATE		\
-	_IOW(0xF6, 0x31, struct lttng_kernel_trigger)
-
-#define LTTNG_KERNEL_CAPTURE _IO(0xF6, 0x32)
-
-#define LTTNG_KERNEL_COUNTER \
-	_IOW(0xF6, 0x33, struct lttng_kernel_counter_conf)
-
-#define LTTNG_KERNEL_COUNTER_VALUE \
-	_IOWR(0xF6, 0x34, struct lttng_kernel_counter_value)
-
 /* Session FD ioctl */
 /* lttng/abi-old.h reserve 0x50, 0x51, 0x52, and 0x53. */
 #define LTTNG_KERNEL_METADATA			\
@@ -378,8 +439,10 @@ struct lttng_kernel_tracker_args {
 /* Channel FD ioctl */
 /* lttng/abi-old.h reserve 0x60 and 0x61. */
 #define LTTNG_KERNEL_STREAM			_IO(0xF6, 0x62)
+/* LTTNG_KERNEL_EVENT applies to both channel and counter fds. */
 #define LTTNG_KERNEL_EVENT			\
 	_IOW(0xF6, 0x63, struct lttng_kernel_event)
+/* LTTNG_KERNEL_SYSCALL_MASK applies to both channel and counter fds. */
 #define LTTNG_KERNEL_SYSCALL_MASK		\
 	_IOWR(0xF6, 0x64, struct lttng_kernel_syscall_mask)
 
@@ -388,12 +451,18 @@ struct lttng_kernel_tracker_args {
 #define LTTNG_KERNEL_CONTEXT			\
 	_IOW(0xF6, 0x71, struct lttng_kernel_context)
 
-/* Event, Channel and Session ioctl */
+/* Event, Channel, Counter, Trigger and Session ioctl */
 /* lttng/abi-old.h reserve 0x80 and 0x81. */
 #define LTTNG_KERNEL_ENABLE			_IO(0xF6, 0x82)
 #define LTTNG_KERNEL_DISABLE			_IO(0xF6, 0x83)
 
-/* Event FD ioctl */
+/* Trigger group and session ioctl */
+#define LTTNG_KERNEL_TRIGGER_CREATE		\
+	_IOW(0xF6, 0x84, struct lttng_kernel_trigger)
+#define LTTNG_KERNEL_COUNTER \
+	_IOW(0xF6, 0x85, struct lttng_kernel_counter_conf)
+
+/* Event and Trigger FD ioctl */
 #define LTTNG_KERNEL_FILTER			_IO(0xF6, 0x90)
 #define LTTNG_KERNEL_ADD_CALLSITE		_IO(0xF6, 0x91)
 
@@ -404,6 +473,26 @@ struct lttng_kernel_tracker_args {
 	_IOR(0xF6, 0xA1, struct lttng_kernel_tracker_args)
 #define LTTNG_KERNEL_SESSION_UNTRACK_ID		\
 	_IOR(0xF6, 0xA2, struct lttng_kernel_tracker_args)
+
+/* Trigger group file descriptor ioctl */
+#define LTTNG_KERNEL_TRIGGER_GROUP_NOTIFICATION_FD \
+	_IO(0xF6, 0xB0)
+
+/* Trigger file descriptor ioctl */
+#define LTTNG_KERNEL_CAPTURE			_IO(0xF6, 0xB8)
+
+/* Counter file descriptor ioctl */
+#define LTTNG_KERNEL_COUNTER_READ \
+	_IOWR(0xF6, 0xC0, struct lttng_kernel_counter_read)
+#define LTTNG_KERNEL_COUNTER_AGGREGATE \
+	_IOWR(0xF6, 0xC1, struct lttng_kernel_counter_aggregate)
+#define LTTNG_KERNEL_COUNTER_CLEAR \
+	_IOW(0xF6, 0xC2, struct lttng_kernel_counter_clear)
+#define LTTNG_KERNEL_COUNTER_MAP_NR_DESCRIPTORS \
+	_IOR(0xF6, 0xC3, struct lttng_kernel_counter_map_nr_descriptors)
+#define LTTNG_KERNEL_COUNTER_MAP_DESCRIPTOR \
+	_IOWR(0xF6, 0xC4, struct lttng_kernel_counter_map_descriptor)
+/* LTTNG_KERNEL_EVENT also applies to counter fds. */
 
 /*
  * LTTng-specific ioctls for the lib ringbuffer.
