@@ -457,10 +457,8 @@ struct lttng_kernel_tracker_args {
 #define LTTNG_KERNEL_DISABLE			_IO(0xF6, 0x83)
 
 /* Trigger group and session ioctl */
-#define LTTNG_KERNEL_TRIGGER_CREATE		\
-	_IOW(0xF6, 0x84, struct lttng_kernel_trigger)
 #define LTTNG_KERNEL_COUNTER \
-	_IOW(0xF6, 0x85, struct lttng_kernel_counter_conf)
+	_IOW(0xF6, 0x84, struct lttng_kernel_counter_conf)
 
 /* Event and Trigger FD ioctl */
 #define LTTNG_KERNEL_FILTER			_IO(0xF6, 0x90)
@@ -475,8 +473,10 @@ struct lttng_kernel_tracker_args {
 	_IOR(0xF6, 0xA2, struct lttng_kernel_tracker_args)
 
 /* Trigger group file descriptor ioctl */
+#define LTTNG_KERNEL_TRIGGER_CREATE		\
+	_IOW(0xF6, 0xB0, struct lttng_kernel_trigger)
 #define LTTNG_KERNEL_TRIGGER_GROUP_NOTIFICATION_FD \
-	_IO(0xF6, 0xB0)
+	_IO(0xF6, 0xB1)
 
 /* Trigger file descriptor ioctl */
 #define LTTNG_KERNEL_CAPTURE			_IO(0xF6, 0xB8)
