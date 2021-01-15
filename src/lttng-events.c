@@ -70,8 +70,8 @@ static void lttng_event_notifier_group_sync_enablers(struct lttng_event_notifier
 
 static void _lttng_event_destroy(struct lttng_event *event);
 static void _lttng_event_notifier_destroy(struct lttng_event_notifier *event_notifier);
-static void _lttng_channel_destroy(struct lttng_event_container *container);
-static void _lttng_session_counter_destroy(struct lttng_event_container *container);
+static void _lttng_channel_destroy(struct lttng_channel *channel);
+static void _lttng_session_counter_destroy(struct lttng_counter *counter);
 static int _lttng_event_unregister(struct lttng_event *event);
 static int _lttng_event_notifier_unregister(struct lttng_event_notifier *event_notifier);
 static
@@ -95,7 +95,7 @@ static bool lttng_event_container_is_metadata_channel(struct lttng_event_contain
 	switch (container->type) {
 	case LTTNG_EVENT_CONTAINER_CHANNEL:
 	{
-		struct lttng_channel *chan = &container->u.channel;
+		struct lttng_channel *chan = lttng_event_container_get_channel(container);
 
 		return chan->channel_type == METADATA_CHANNEL;
 	}
@@ -237,13 +237,13 @@ struct lttng_counter_transport *lttng_counter_transport_find(const char *name)
 }
 
 static
-struct lttng_event_container *lttng_kernel_counter_create(
+struct lttng_counter *lttng_kernel_counter_create(
 		const char *counter_transport_name,
 		size_t number_dimensions, const size_t *dimensions_sizes)
 {
 	struct lttng_counter_transport *counter_transport = NULL;
-	struct lttng_event_container *container = NULL;
-	struct lttng_counter *counter;
+	struct lttng_counter *counter = NULL;
+	struct lttng_event_container *container;
 
 	counter_transport = lttng_counter_transport_find(counter_transport_name);
 	if (!counter_transport) {
@@ -256,11 +256,11 @@ struct lttng_event_container *lttng_kernel_counter_create(
 		goto notransport;
 	}
 
-	container = lttng_kvzalloc(sizeof(struct lttng_event_container), GFP_KERNEL);
-	if (!container)
+	counter = lttng_kvzalloc(sizeof(struct lttng_counter), GFP_KERNEL);
+	if (!counter)
 		goto nomem;
+	container = lttng_counter_get_event_container(counter);
 	container->type = LTTNG_EVENT_CONTAINER_COUNTER;
-	counter = &container->u.counter;
 	/* Create event notifier error counter. */
 	counter->ops = &counter_transport->ops;
 	counter->transport = counter_transport;
@@ -273,10 +273,10 @@ struct lttng_event_container *lttng_kernel_counter_create(
 		goto create_error;
 	}
 
-	return container;
+	return counter;
 
 create_error:
-	lttng_kvfree(container);
+	lttng_kvfree(counter);
 nomem:
 	if (counter_transport)
 		module_put(counter_transport->owner);
@@ -285,14 +285,12 @@ notransport:
 }
 
 static
-void lttng_kernel_counter_destroy(struct lttng_event_container *container)
+void lttng_kernel_counter_destroy(struct lttng_counter *counter)
 {
-	struct lttng_counter *counter = &container->u.counter;
-
 	counter->ops->counter_destroy(counter->counter);
 	module_put(counter->transport->owner);
 	lttng_kvfree(counter->map.descriptors);
-	lttng_kvfree(container);
+	lttng_kvfree(counter);
 }
 
 int lttng_event_notifier_group_set_error_counter(
@@ -300,7 +298,7 @@ int lttng_event_notifier_group_set_error_counter(
 		const char *counter_transport_name,
 		size_t counter_len)
 {
-	struct lttng_event_container *container;
+	struct lttng_counter *counter;
 	int ret;
 
 	/*
@@ -316,9 +314,9 @@ int lttng_event_notifier_group_set_error_counter(
 		goto error;
 	}
 
-	container = lttng_kernel_counter_create(counter_transport_name,
+	counter = lttng_kernel_counter_create(counter_transport_name,
 			1, &counter_len);
-	if (!container) {
+	if (!counter) {
 		ret = -EINVAL;
 		goto error;
 	}
@@ -330,7 +328,7 @@ int lttng_event_notifier_group_set_error_counter(
 	 * error_counter_len is set before they are used.
 	 */
 	lttng_smp_store_release(&event_notifier_group->error_counter,
-				&container->u.counter);
+				counter);
 
 	mutex_unlock(&sessions_mutex);
 	return 0;
@@ -405,27 +403,27 @@ notransport:
 	return NULL;
 }
 
-struct lttng_event_container *lttng_session_create_counter(
+struct lttng_counter *lttng_session_create_counter(
 	struct lttng_session *session,
 	const char *counter_transport_name,
 	size_t number_dimensions, const size_t *dimensions_sizes)
 {
-	struct lttng_event_container *container;
 	struct lttng_counter *counter;
+	struct lttng_event_container *container;
 
-	container = lttng_kernel_counter_create(counter_transport_name,
+	counter = lttng_kernel_counter_create(counter_transport_name,
 			number_dimensions, dimensions_sizes);
-	if (!container) {
+	if (!counter) {
 		goto counter_error;
 	}
-	counter = &container->u.counter;
+	container = lttng_counter_get_event_container(counter);
 
 	mutex_lock(&sessions_mutex);
 	container->session = session;
 	list_add(&counter->node, &session->counters);
 	mutex_unlock(&sessions_mutex);
 
-	return container;
+	return counter;
 
 counter_error:
 	return NULL;
@@ -478,10 +476,10 @@ void lttng_session_destroy(struct lttng_session *session)
 		_lttng_event_destroy(event);
 	list_for_each_entry_safe(chan, tmpchan, &session->chan, list) {
 		BUG_ON(chan->channel_type == METADATA_CHANNEL);
-		_lttng_channel_destroy(lttng_channel_get_event_container(chan));
+		_lttng_channel_destroy(chan);
 	}
 	list_for_each_entry_safe(counter, tmpcounter, &session->counters, node)
-		_lttng_session_counter_destroy(lttng_counter_get_event_container(counter));
+		_lttng_session_counter_destroy(counter);
 	mutex_lock(&session->metadata_cache->lock);
 	list_for_each_entry(metadata_stream, &session->metadata_cache->metadata_stream, list)
 		_lttng_metadata_channel_hangup(metadata_stream);
@@ -537,7 +535,7 @@ void lttng_event_notifier_group_destroy(
 	if (event_notifier_group->error_counter) {
 		struct lttng_counter *error_counter = event_notifier_group->error_counter;
 
-		lttng_kernel_counter_destroy(lttng_counter_get_event_container(error_counter));
+		lttng_kernel_counter_destroy(error_counter);
 		event_notifier_group->error_counter = NULL;
 	}
 
@@ -854,7 +852,7 @@ end:
 	return ret;
 }
 
-struct lttng_event_container *lttng_channel_create(struct lttng_session *session,
+struct lttng_channel *lttng_channel_create(struct lttng_session *session,
 				       const char *transport_name,
 				       void *buf_addr,
 				       size_t subbuf_size, size_t num_subbuf,
@@ -863,7 +861,7 @@ struct lttng_event_container *lttng_channel_create(struct lttng_session *session
 				       enum channel_type channel_type)
 {
 	struct lttng_event_container *container;
-	struct lttng_channel *chan;
+	struct lttng_channel *chan = NULL;
 	struct lttng_transport *transport = NULL;
 
 	mutex_lock(&sessions_mutex);
@@ -879,15 +877,15 @@ struct lttng_event_container *lttng_channel_create(struct lttng_session *session
 		printk(KERN_WARNING "LTTng: Can't lock transport module.\n");
 		goto notransport;
 	}
-	container = lttng_kvzalloc(sizeof(struct lttng_event_container), GFP_KERNEL);
-	if (!container)
+	chan = lttng_kvzalloc(sizeof(struct lttng_channel), GFP_KERNEL);
+	if (!chan)
 		goto nomem;
+	container = lttng_channel_get_event_container(chan);
 	container->type = LTTNG_EVENT_CONTAINER_CHANNEL;
 	container->session = session;
 	container->tstate = 1;
 	container->enabled = 1;
 
-	chan = &container->u.channel;
 	chan->id = session->free_chan_id++;
 	chan->ops = &transport->ops;
 	/*
@@ -904,7 +902,7 @@ struct lttng_event_container *lttng_channel_create(struct lttng_session *session
 	chan->channel_type = channel_type;
 	list_add(&chan->list, &session->chan);
 	mutex_unlock(&sessions_mutex);
-	return container;
+	return chan;
 
 create_error:
 	lttng_kvfree(chan);
@@ -918,12 +916,10 @@ active:
 }
 
 static
-void _lttng_session_counter_destroy(struct lttng_event_container *container)
+void _lttng_session_counter_destroy(struct lttng_counter *counter)
 {
-	struct lttng_counter *counter = &container->u.counter;
-
 	list_del(&counter->node);
-	lttng_kernel_counter_destroy(container);
+	lttng_kernel_counter_destroy(counter);
 }
 
 /*
@@ -932,25 +928,21 @@ void _lttng_session_counter_destroy(struct lttng_event_container *container)
  * Needs to be called with sessions mutex held.
  */
 static
-void _lttng_channel_destroy(struct lttng_event_container *container)
+void _lttng_channel_destroy(struct lttng_channel *chan)
 {
-	struct lttng_channel *chan = &container->u.channel;
-
 	chan->ops->channel_destroy(chan->chan);
 	module_put(chan->transport->owner);
 	list_del(&chan->list);
 	lttng_destroy_context(chan->ctx);
-	lttng_kvfree(container);
+	lttng_kvfree(chan);
 }
 
-void lttng_metadata_channel_destroy(struct lttng_event_container *container)
+void lttng_metadata_channel_destroy(struct lttng_channel *chan)
 {
-	struct lttng_channel *chan = &container->u.channel;
-
 	BUG_ON(chan->channel_type != METADATA_CHANNEL);
 	/* Protect the metadata cache with the sessions_mutex. */
 	mutex_lock(&sessions_mutex);
-	_lttng_channel_destroy(container);
+	_lttng_channel_destroy(chan);
 	mutex_unlock(&sessions_mutex);
 }
 EXPORT_SYMBOL_GPL(lttng_metadata_channel_destroy);
@@ -967,10 +959,14 @@ bool lttng_event_container_current_id_full(struct lttng_event_container *contain
 {
 	switch (container->type) {
 	case LTTNG_EVENT_CONTAINER_CHANNEL:
-		return container->u.channel.free_event_id == -1U;
+	{
+		struct lttng_channel *channel = lttng_event_container_get_channel(container);
+
+		return channel->free_event_id == -1U;
+	}
 	case LTTNG_EVENT_CONTAINER_COUNTER:
 	{
-		struct lttng_counter *counter = &container->u.counter;
+		struct lttng_counter *counter = lttng_event_container_get_counter(container);
 		size_t nr_dimensions, max_nr_elem;
 
 		if (lttng_counter_get_nr_dimensions(&counter->counter->config,
@@ -982,7 +978,7 @@ bool lttng_event_container_current_id_full(struct lttng_event_container *contain
 		if (lttng_counter_get_max_nr_elem(&counter->counter->config,
 				counter->counter, &max_nr_elem))
 			return true;
-		return container->u.counter.free_index >= max_nr_elem;
+		return counter->free_index >= max_nr_elem;
 	}
 	default:
 		WARN_ON_ONCE(1);
@@ -1018,11 +1014,17 @@ int lttng_event_container_allocate_id(struct lttng_event_container *container,
 
 	switch (container->type) {
 	case LTTNG_EVENT_CONTAINER_CHANNEL:
-		*id =  container->u.channel.free_event_id++;
+	{
+		struct lttng_channel *channel = lttng_event_container_get_channel(container);
+		*id =  channel->free_event_id++;
 		break;
+	}
 	case LTTNG_EVENT_CONTAINER_COUNTER:
-		*id = container->u.counter.free_index++;
+	{
+		struct lttng_counter *counter = lttng_event_container_get_counter(container);
+		*id = counter->free_index++;
 		break;
+	}
 	default:
 		WARN_ON_ONCE(1);
 		return 0;
@@ -2488,14 +2490,16 @@ int lttng_event_enabler_ref_events(struct lttng_event_enabler *event_enabler)
 			switch (container->type) {
 			case LTTNG_EVENT_CONTAINER_COUNTER:
 			{
+				struct lttng_counter *counter;
 				const char *name = "<UNKNOWN>";
 				int ret;
 
+				counter = lttng_event_container_get_counter(container);
 				if (event->key[0])
 					name = event->key;
 				else if (event->desc && event->desc->name)
 					name = event->desc->name;
-				ret = lttng_counter_append_descriptor(&container->u.counter,
+				ret = lttng_counter_append_descriptor(counter,
 						event_enabler->base.user_token, event->id,
 						name);
 				if (ret) {
@@ -3847,7 +3851,7 @@ int _lttng_event_metadata_statedump(struct lttng_session *session,
 	int ret = 0;
 
 	WARN_ON_ONCE(event->container->type != LTTNG_EVENT_CONTAINER_CHANNEL);
-	chan = &event->container->u.channel;
+	chan = lttng_event_container_get_channel(event->container);
 	if (event->metadata_dumped || !LTTNG_READ_ONCE(session->active))
 		return 0;
 	if (chan->channel_type == METADATA_CHANNEL)

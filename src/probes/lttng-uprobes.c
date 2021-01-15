@@ -33,7 +33,7 @@ int lttng_uprobes_event_handler_pre(struct uprobe_consumer *uc, struct pt_regs *
 		.interruptible = !lttng_regs_irqs_disabled(regs),
 	};
 	struct lttng_event_container *container = event->container;
-	struct lttng_channel *chan = &container->u.channel;
+	struct lttng_channel *chan = lttng_event_container_get_channel(container);
 	struct lib_ring_buffer_ctx ctx;
 	int ret;
 

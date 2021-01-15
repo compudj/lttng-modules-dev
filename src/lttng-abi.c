@@ -489,6 +489,7 @@ int lttng_abi_create_channel(struct file *session_file,
 	struct lttng_session *session = session_file->private_data;
 	const struct file_operations *fops = NULL;
 	const char *transport_name;
+	struct lttng_channel *chan;
 	struct lttng_event_container *container;
 	struct file *chan_file;
 	int chan_fd;
@@ -547,18 +548,19 @@ int lttng_abi_create_channel(struct file *session_file,
 	 * We tolerate no failure path after channel creation. It will stay
 	 * invariant for the rest of the session.
 	 */
-	container = lttng_channel_create(session, transport_name, NULL,
+	chan = lttng_channel_create(session, transport_name, NULL,
 				  chan_param->subbuf_size,
 				  chan_param->num_subbuf,
 				  chan_param->switch_timer_interval,
 				  chan_param->read_timer_interval,
 				  channel_type);
-	if (!container) {
+	if (!chan) {
 		ret = -EINVAL;
 		goto chan_error;
 	}
+	container = lttng_channel_get_event_container(chan);
 	container->file = chan_file;
-	chan_file->private_data = container;
+	chan_file->private_data = chan;
 	fd_install(chan_fd, chan_file);
 
 	return chan_fd;
@@ -743,14 +745,14 @@ fd_error:
 static
 int lttng_counter_release(struct inode *inode, struct file *file)
 {
-	struct lttng_event_container *container = file->private_data;
+	struct lttng_counter *counter = file->private_data;
 
-	if (container) {
+	if (counter) {
 		/*
 		 * Do not destroy the counter itself. Wait of the owner
 		 * (event_notifier group) to be destroyed.
 		 */
-		fput(container->u.counter.owner);
+		fput(counter->owner);
 	}
 
 	return 0;
@@ -812,8 +814,8 @@ int copy_counter_key(struct lttng_counter_key *key,
 static
 long lttng_counter_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	struct lttng_event_container *container = file->private_data;
-	struct lttng_counter *counter = &container->u.counter;
+	struct lttng_counter *counter = file->private_data;
+	struct lttng_event_container *container = lttng_counter_get_event_container(counter);
 	size_t indexes[LTTNG_KERNEL_COUNTER_DIMENSION_MAX] = { 0 };
 	int i;
 
@@ -1028,7 +1030,8 @@ long lttng_abi_session_create_counter(
 {
 	int counter_fd, ret, i;
 	char *counter_transport_name;
-	struct lttng_event_container *container = NULL;
+	struct lttng_event_container *container;
+	struct lttng_counter *counter;
 	struct file *counter_file;
 	size_t dimension_sizes[LTTNG_KERNEL_COUNTER_DIMENSION_MAX] = { 0 };
 	size_t number_dimensions;
@@ -1074,17 +1077,18 @@ long lttng_abi_session_create_counter(
 		dimension_sizes[i] = count_bucket_number(&counter_conf->dimensions[i]);
 	}
 
-	container = lttng_session_create_counter(session,
+	counter = lttng_session_create_counter(session,
 			counter_transport_name,
 			number_dimensions, dimension_sizes);
-	if (!container) {
+	if (!counter) {
 		ret = -EINVAL;
 		goto counter_error;
 	}
 
-	container->u.counter.owner = session->file;
+	counter->owner = session->file;
+	container = lttng_counter_get_event_container(counter);
 	container->file = counter_file;
-	counter_file->private_data = container;
+	counter_file->private_data = counter;
 
 	fd_install(counter_fd, counter_file);
 
@@ -1967,10 +1971,9 @@ fd_error:
 }
 
 static
-int lttng_abi_open_stream(struct file *container_file)
+int lttng_abi_open_stream(struct file *file)
 {
-	struct lttng_event_container *container = container_file->private_data;
-	struct lttng_channel *channel = &container->u.channel;
+	struct lttng_channel *channel = file->private_data;
 	struct lib_ring_buffer *buf;
 	int ret;
 	void *stream_priv;
@@ -1980,7 +1983,7 @@ int lttng_abi_open_stream(struct file *container_file)
 		return -ENOENT;
 
 	stream_priv = buf;
-	ret = lttng_abi_create_stream_fd(container_file, stream_priv,
+	ret = lttng_abi_create_stream_fd(file, stream_priv,
 			&lttng_stream_ring_buffer_file_operations,
 			"[lttng_stream]");
 	if (ret < 0)
@@ -1994,10 +1997,10 @@ fd_error:
 }
 
 static
-int lttng_abi_open_metadata_stream(struct file *container_file)
+int lttng_abi_open_metadata_stream(struct file *file)
 {
-	struct lttng_event_container *container = container_file->private_data;
-	struct lttng_channel *channel = &container->u.channel;
+	struct lttng_channel *channel = file->private_data;
+	struct lttng_event_container *container = lttng_channel_get_event_container(channel);
 	struct lttng_session *session = container->session;
 	struct lib_ring_buffer *buf;
 	int ret;
@@ -2037,7 +2040,7 @@ int lttng_abi_open_metadata_stream(struct file *container_file)
 		goto kref_error;
 	}
 
-	ret = lttng_abi_create_stream_fd(container_file, stream_priv,
+	ret = lttng_abi_create_stream_fd(file, stream_priv,
 			&lttng_metadata_ring_buffer_file_operations,
 			"[lttng_metadata_stream]");
 	if (ret < 0)
@@ -2379,7 +2382,7 @@ long lttng_abi_event_notifier_group_create_error_counter(
 	container = lttng_counter_get_event_container(counter);
 	container->file = counter_file;
 	counter->owner = event_notifier_group->file;
-	counter_file->private_data = container;
+	counter_file->private_data = counter;
 
 	fd_install(counter_fd, counter_file);
 
@@ -2476,8 +2479,8 @@ static const struct file_operations lttng_event_notifier_group_fops = {
 static
 long lttng_channel_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	struct lttng_event_container *container = file->private_data;
-	struct lttng_channel *channel = &container->u.channel;
+	struct lttng_channel *channel = file->private_data;
+	struct lttng_event_container *container = lttng_channel_get_event_container(channel);
 
 	switch (cmd) {
 	case LTTNG_KERNEL_OLD_STREAM:
@@ -2668,8 +2671,7 @@ long lttng_metadata_ioctl(struct file *file, unsigned int cmd, unsigned long arg
  */
 unsigned int lttng_channel_poll(struct file *file, poll_table *wait)
 {
-	struct lttng_event_container *container = file->private_data;
-	struct lttng_channel *channel = &container->u.channel;
+	struct lttng_channel *channel = file->private_data;
 	unsigned int mask = 0;
 
 	if (file->f_mode & FMODE_READ) {
@@ -2692,21 +2694,26 @@ unsigned int lttng_channel_poll(struct file *file, poll_table *wait)
 static
 int lttng_channel_release(struct inode *inode, struct file *file)
 {
-	struct lttng_event_container *container = file->private_data;
+	struct lttng_channel *chan = file->private_data;
 
-	if (container)
+	if (chan) {
+		struct lttng_event_container *container = lttng_channel_get_event_container(chan);
+
 		fput(container->session->file);
+	}
 	return 0;
 }
 
 static
 int lttng_metadata_channel_release(struct inode *inode, struct file *file)
 {
-	struct lttng_event_container *container = file->private_data;
+	struct lttng_channel *chan = file->private_data;
 
-	if (container) {
+	if (chan) {
+		struct lttng_event_container *container = lttng_channel_get_event_container(chan);
+
 		fput(container->session->file);
-		lttng_metadata_channel_destroy(container);
+		lttng_metadata_channel_destroy(chan);
 	}
 
 	return 0;

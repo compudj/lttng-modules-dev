@@ -142,7 +142,7 @@ size_t record_header_size(const struct lib_ring_buffer_config *config,
 				 struct lttng_client_ctx *client_ctx)
 {
 	struct lttng_event_container *container = channel_get_private(chan);
-	struct lttng_channel *lttng_chan = &container->u.channel;
+	struct lttng_channel *lttng_chan = lttng_event_container_get_channel(container);
 	struct lttng_probe_ctx *lttng_probe_ctx = ctx->priv;
 	struct lttng_event *event = lttng_probe_ctx->event;
 	size_t orig_offset = offset;
@@ -214,7 +214,7 @@ void lttng_write_event_header(const struct lib_ring_buffer_config *config,
 			    uint32_t event_id)
 {
 	struct lttng_event_container *container = channel_get_private(ctx->chan);
-	struct lttng_channel *lttng_chan = &container->u.channel;
+	struct lttng_channel *lttng_chan = lttng_event_container_get_channel(container);
 	struct lttng_probe_ctx *lttng_probe_ctx = ctx->priv;
 	struct lttng_event *event = lttng_probe_ctx->event;
 
@@ -267,7 +267,7 @@ void lttng_write_event_header_slow(const struct lib_ring_buffer_config *config,
 				 uint32_t event_id)
 {
 	struct lttng_event_container *container = channel_get_private(ctx->chan);
-	struct lttng_channel *lttng_chan = &container->u.channel;
+	struct lttng_channel *lttng_chan = lttng_event_container_get_channel(container);
 	struct lttng_probe_ctx *lttng_probe_ctx = ctx->priv;
 	struct lttng_event *event = lttng_probe_ctx->event;
 
@@ -369,7 +369,7 @@ static void client_buffer_begin(struct lib_ring_buffer *buf, u64 tsc,
 			lib_ring_buffer_offset_address(&buf->backend,
 				subbuf_idx * chan->backend.subbuf_size);
 	struct lttng_event_container *container = channel_get_private(chan);
-	struct lttng_channel *lttng_chan = &container->u.channel;
+	struct lttng_channel *lttng_chan = lttng_event_container_get_channel(container);
 	struct lttng_session *session = container->session;
 
 	header->magic = CTF_MAGIC_NUMBER;
@@ -485,7 +485,7 @@ static int client_stream_id(const struct lib_ring_buffer_config *config,
 {
 	struct channel *chan = buf->backend.chan;
 	struct lttng_event_container *container = channel_get_private(chan);
-	struct lttng_channel *lttng_chan = &container->u.channel;
+	struct lttng_channel *lttng_chan = lttng_event_container_get_channel(container);
 
 	*stream_id = lttng_chan->id;
 	return 0;
@@ -624,7 +624,7 @@ int lttng_event_reserve(struct lib_ring_buffer_ctx *ctx,
 		      uint32_t event_id)
 {
 	struct lttng_event_container *container = channel_get_private(ctx->chan);
-	struct lttng_channel *lttng_chan = &container->u.channel;
+	struct lttng_channel *lttng_chan = lttng_event_container_get_channel(container);
 	struct lttng_probe_ctx *lttng_probe_ctx = ctx->priv;
 	struct lttng_event *event = lttng_probe_ctx->event;
 	struct lttng_client_ctx client_ctx;

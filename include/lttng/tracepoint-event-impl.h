@@ -1239,7 +1239,7 @@ static void __event_probe__##_name(void *__data, _proto)		      \
 	switch (__container->type) {					      \
 	case LTTNG_EVENT_CONTAINER_CHANNEL:				      \
 	{								      \
-		struct lttng_channel *__chan = &__container->u.channel;	      \
+		struct lttng_channel *__chan = lttng_event_container_get_channel(__container); \
 		ssize_t __event_len;					      \
 		size_t __event_align;					      \
 									      \
@@ -1260,7 +1260,7 @@ static void __event_probe__##_name(void *__data, _proto)		      \
 	}								      \
 	case LTTNG_EVENT_CONTAINER_COUNTER:				      \
 	{								      \
-		struct lttng_counter *__counter = &__container->u.counter;    \
+		struct lttng_counter *__counter = lttng_event_container_get_counter(__container); \
 		size_t __index = __event->id;				      \
 									      \
 		(void) __counter->ops->counter_add(__counter->counter, &__index, 1); \
@@ -1350,7 +1350,7 @@ static void __event_probe__##_name(void *__data)			      \
 	switch (__container->type) {					      \
 	case LTTNG_EVENT_CONTAINER_CHANNEL:				      \
 	{								      \
-		struct lttng_channel *__chan = &__container->u.channel;	      \
+		struct lttng_channel *__chan = lttng_event_container_get_channel(__container); \
 		struct lib_ring_buffer_ctx __ctx;			      \
 		ssize_t __event_len;					      \
 		size_t __event_align;					      \
@@ -1372,7 +1372,7 @@ static void __event_probe__##_name(void *__data)			      \
 	}								      \
 	case LTTNG_EVENT_CONTAINER_COUNTER:				      \
 	{								      \
-		struct lttng_counter *__counter = &__container->u.counter;    \
+		struct lttng_counter *__counter = lttng_event_container_get_counter(__container); \
 		size_t __index = __event->id;				      \
 									      \
 		(void) __counter->ops->counter_add(__counter->counter, &__index, 1); \

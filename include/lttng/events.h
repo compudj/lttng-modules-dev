@@ -323,11 +323,6 @@ struct lttng_syscall {
 	bool is_compat;
 };
 
-enum lttng_event_container_type {
-	LTTNG_EVENT_CONTAINER_CHANNEL,
-	LTTNG_EVENT_CONTAINER_COUNTER,
-};
-
 enum lttng_key_token_type {
 	LTTNG_KEY_TOKEN_STRING = 0,
 	LTTNG_KEY_TOKEN_EVENT_NAME = 1,
@@ -615,6 +610,45 @@ struct lttng_event_notifier_ht {
 	struct hlist_head table[LTTNG_EVENT_NOTIFIER_HT_SIZE];
 };
 
+enum lttng_event_container_type {
+	LTTNG_EVENT_CONTAINER_CHANNEL,
+	LTTNG_EVENT_CONTAINER_COUNTER,
+};
+
+/*
+ * An event can be contained within either a channel or a counter.
+ */
+struct lttng_event_container {
+	enum lttng_event_container_type type;
+
+	struct file *file;			/* File associated to event container */
+	struct lttng_session *session;		/* Session containing the container */
+	int enabled;
+	struct hlist_head *sc_table;		/* for syscall tracing */
+	struct hlist_head *compat_sc_table;
+	struct hlist_head *sc_exit_table;	/* for syscall exit tracing */
+	struct hlist_head *compat_sc_exit_table;
+
+	/*
+	 * Combining all unknown syscall events works as long as they
+	 * are only matched by "all" syscalls enablers, but will require
+	 * a design change when we allow matching by syscall number, for
+	 * instance by allocating sc_tables accomodating NR_syscalls
+	 * entries.
+	 */
+	struct hlist_head sc_unknown;		/* for unknown syscalls */
+	struct hlist_head sc_compat_unknown;
+	struct hlist_head sc_exit_unknown;
+	struct hlist_head compat_sc_exit_unknown;
+
+	struct lttng_syscall_filter *sc_filter;
+	int syscall_all_entry;
+	int syscall_all_exit;
+	unsigned int sys_enter_registered:1,
+		sys_exit_registered:1,
+		tstate:1;			/* Transient enable state */
+};
+
 struct lttng_channel {
 	unsigned int id;
 	struct channel *chan;		/* Channel buffers */
@@ -627,6 +661,8 @@ struct lttng_channel {
 	int header_type;		/* 0: unset, 1: compact, 2: large */
 	enum channel_type channel_type;
 	unsigned int metadata_dumped:1;
+
+	struct lttng_event_container parent;
 };
 
 struct lttng_metadata_stream {
@@ -735,44 +771,8 @@ struct lttng_counter {
 
 	size_t free_index;		/* Next index to allocate */
 	struct lttng_counter_map map;
-};
 
-/*
- * An event can be contained within either a channel or a counter.
- */
-struct lttng_event_container {
-	enum lttng_event_container_type type;
-	union {
-		struct lttng_channel channel;
-		struct lttng_counter counter;
-	} u;
-
-	struct file *file;			/* File associated to event container */
-	struct lttng_session *session;		/* Session containing the container */
-	int enabled;
-	struct hlist_head *sc_table;		/* for syscall tracing */
-	struct hlist_head *compat_sc_table;
-	struct hlist_head *sc_exit_table;	/* for syscall exit tracing */
-	struct hlist_head *compat_sc_exit_table;
-
-	/*
-	 * Combining all unknown syscall events works as long as they
-	 * are only matched by "all" syscalls enablers, but will require
-	 * a design change when we allow matching by syscall number, for
-	 * instance by allocating sc_tables accomodating NR_syscalls
-	 * entries.
-	 */
-	struct hlist_head sc_unknown;		/* for unknown syscalls */
-	struct hlist_head sc_compat_unknown;
-	struct hlist_head sc_exit_unknown;
-	struct hlist_head compat_sc_exit_unknown;
-
-	struct lttng_syscall_filter *sc_filter;
-	int syscall_all_entry;
-	int syscall_all_exit;
-	unsigned int sys_enter_registered:1,
-		sys_exit_registered:1,
-		tstate:1;			/* Transient enable state */
+	struct lttng_event_container parent;
 };
 
 struct lttng_event_notifier_group {
@@ -828,13 +828,29 @@ struct lttng_metadata_cache {
 static inline
 struct lttng_event_container *lttng_channel_get_event_container(struct lttng_channel *channel)
 {
-	return container_of(channel, struct lttng_event_container, u.channel);
+	return &channel->parent;
 }
 
 static inline
 struct lttng_event_container *lttng_counter_get_event_container(struct lttng_counter *counter)
 {
-	return container_of(counter, struct lttng_event_container, u.counter);
+	return &counter->parent;
+}
+
+static inline
+struct lttng_channel *lttng_event_container_get_channel(struct lttng_event_container *container)
+{
+	if (container->type != LTTNG_EVENT_CONTAINER_CHANNEL)
+		return NULL;
+	return container_of(container, struct lttng_channel, parent);
+}
+
+static inline
+struct lttng_counter *lttng_event_container_get_counter(struct lttng_event_container *container)
+{
+	if (container->type != LTTNG_EVENT_CONTAINER_COUNTER)
+		return NULL;
+	return container_of(container, struct lttng_counter, parent);
 }
 
 void lttng_lock_sessions(void);
@@ -894,7 +910,7 @@ int lttng_event_notifier_group_set_error_counter(
 		const char *counter_transport_name,
 		size_t counter_len);
 
-struct lttng_event_container *lttng_channel_create(struct lttng_session *session,
+struct lttng_channel *lttng_channel_create(struct lttng_session *session,
 				       const char *transport_name,
 				       void *buf_addr,
 				       size_t subbuf_size, size_t num_subbuf,
@@ -902,7 +918,7 @@ struct lttng_event_container *lttng_channel_create(struct lttng_session *session
 				       unsigned int read_timer_interval,
 				       enum channel_type channel_type);
 
-void lttng_metadata_channel_destroy(struct lttng_event_container *container);
+void lttng_metadata_channel_destroy(struct lttng_channel *chan);
 struct lttng_event *lttng_event_create(struct lttng_event_container *container,
 				struct lttng_kernel_event *event_param,
 				const struct lttng_counter_key *key,
@@ -915,7 +931,7 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 				void *filter,
 				const struct lttng_event_desc *event_desc,
 				enum lttng_kernel_instrumentation itype);
-struct lttng_event_container *lttng_session_create_counter(
+struct lttng_counter *lttng_session_create_counter(
 	struct lttng_session *session,
 	const char *counter_transport_name,
 	size_t number_dimensions, const size_t *dimensions_sizes);
