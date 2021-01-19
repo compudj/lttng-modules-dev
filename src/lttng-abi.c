@@ -1007,22 +1007,6 @@ static const struct file_operations lttng_counter_fops = {
 #endif
 };
 
-static inline size_t count_bucket_number(
-		const struct lttng_kernel_counter_dimension *dim)
-{
-	size_t bucket_number;
-
-	bucket_number = dim->size;
-
-	if (dim->has_underflow)
-		bucket_number++;
-
-	if (dim->has_overflow)
-		bucket_number++;
-
-	return bucket_number;
-}
-
 static
 long lttng_abi_session_create_counter(
 		struct lttng_session *session,
@@ -1066,15 +1050,19 @@ long lttng_abi_session_create_counter(
 		return -EINVAL;
 	}
 
-	if (!atomic_long_add_unless(&session->file->f_count, 1, LONG_MAX)) {
-		ret = -EOVERFLOW;
-		goto refcount_error;
-	}
-
 	number_dimensions = (size_t) counter_conf->number_dimensions;
 
 	for (i = 0; i < counter_conf->number_dimensions; i++) {
-		dimension_sizes[i] = count_bucket_number(&counter_conf->dimensions[i]);
+		if (counter_conf->dimensions[i].has_underflow)
+			return -EINVAL;
+		if (counter_conf->dimensions[i].has_overflow)
+			return -EINVAL;
+		dimension_sizes[i] = counter_conf->dimensions[i].size;
+	}
+
+	if (!atomic_long_add_unless(&session->file->f_count, 1, LONG_MAX)) {
+		ret = -EOVERFLOW;
+		goto refcount_error;
 	}
 
 	counter = lttng_session_create_counter(session,
