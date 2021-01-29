@@ -653,10 +653,10 @@ int lttng_abi_validate_event_param(struct lttng_kernel_event *event_param)
 
 static
 int lttng_abi_create_event(struct file *event_container_file,
+			   struct lttng_event_container *container,
 			   struct lttng_kernel_event *event_param,
 			   const struct lttng_counter_key *key)
 {
-	struct lttng_event_container *container = event_container_file->private_data;
 	int event_fd, ret;
 	struct file *event_file;
 	void *priv;
@@ -932,7 +932,7 @@ long lttng_counter_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		ret = copy_counter_key(key, &ucounter_event_param->key);
 		if (ret)
 			goto free_param;
-		ret = lttng_abi_create_event(file, &ucounter_event_param->event, key);
+		ret = lttng_abi_create_event(file, container, &ucounter_event_param->event, key);
 	free_param:
 		kfree(ucounter_event_param);
 	free_key:
@@ -2531,7 +2531,7 @@ long lttng_channel_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		default:
 			break;
 		}
-		ret = lttng_abi_create_event(file, uevent_param, NULL);
+		ret = lttng_abi_create_event(file, container, uevent_param, NULL);
 
 old_event_error_free_old_param:
 		kfree(old_uevent_param);
@@ -2548,7 +2548,7 @@ old_event_end:
 				(struct lttng_kernel_event __user *) arg,
 				sizeof(uevent_param)))
 			return -EFAULT;
-		return lttng_abi_create_event(file, &uevent_param, NULL);
+		return lttng_abi_create_event(file, container, &uevent_param, NULL);
 	}
 	case LTTNG_KERNEL_OLD_CONTEXT:
 	{
