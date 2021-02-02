@@ -156,6 +156,7 @@ struct lttng_kernel_event_notifier_notification {
 enum lttng_kernel_key_token_type {
 	LTTNG_KERNEL_KEY_TOKEN_STRING = 0,	/* arg: string_ptr. */
 	LTTNG_KERNEL_KEY_TOKEN_EVENT_NAME = 1,	/* no arg. */
+	LTTNG_KERNEL_KEY_TOKEN_PROVIDER_NAME = 2,	/* no arg. */
 };
 
 #define LTTNG_KERNEL_KEY_ARG_PADDING1		60

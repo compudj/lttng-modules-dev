@@ -803,6 +803,9 @@ int copy_counter_key(struct lttng_counter_key *key,
 			case LTTNG_KERNEL_KEY_TOKEN_EVENT_NAME:
 				token->type = LTTNG_KEY_TOKEN_EVENT_NAME;
 				break;
+			case LTTNG_KERNEL_KEY_TOKEN_PROVIDER_NAME:
+				printk(KERN_ERR "LTTng: Provider name token not supported.\n");
+				/* Fallthrough */
 			default:
 				return -EINVAL;
 			}
