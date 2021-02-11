@@ -44,9 +44,23 @@
 			     PARAMS(fields))				\
 	LTTNG_TRACEPOINT_EVENT_INSTANCE_MAP(map, name, map, PARAMS(proto), PARAMS(args))
 
+#undef LTTNG_TRACEPOINT_EVENT_MAP_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_MAP_MAYSLEEP(name, map, proto, args, fields) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_MAYSLEEP(map,			\
+			     PARAMS(proto),				\
+			     PARAMS(args),				\
+			     PARAMS(fields))				\
+	LTTNG_TRACEPOINT_EVENT_INSTANCE_MAP(map, name, map, PARAMS(proto), PARAMS(args))
+
 #undef LTTNG_TRACEPOINT_EVENT_MAP_NOARGS
 #define LTTNG_TRACEPOINT_EVENT_MAP_NOARGS(name, map, fields)		\
 	LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS(map,			\
+			     PARAMS(fields))				\
+	LTTNG_TRACEPOINT_EVENT_INSTANCE_MAP_NOARGS(map, name, map)
+
+#undef LTTNG_TRACEPOINT_EVENT_MAP_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_MAP_NOARGS_MAYSLEEP(name, map, fields)	\
+	LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS_MAYSLEEP(map,		\
 			     PARAMS(fields))				\
 	LTTNG_TRACEPOINT_EVENT_INSTANCE_MAP_NOARGS(map, name, map)
 
@@ -61,9 +75,30 @@
 			     PARAMS(_code_post))			\
 	LTTNG_TRACEPOINT_EVENT_INSTANCE_MAP(map, name, map, PARAMS(proto), PARAMS(args))
 
+#undef LTTNG_TRACEPOINT_EVENT_CODE_MAP_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CODE_MAP_MAYSLEEP(name, map, proto, args, _locvar, _code_pre, fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(map,				\
+			     PARAMS(proto),				\
+			     PARAMS(args),				\
+			     PARAMS(_locvar),				\
+			     PARAMS(_code_pre),				\
+			     PARAMS(fields),				\
+			     PARAMS(_code_post))			\
+	LTTNG_TRACEPOINT_EVENT_INSTANCE_MAP(map, name, map, PARAMS(proto), PARAMS(args))
+
 #undef LTTNG_TRACEPOINT_EVENT_CODE
 #define LTTNG_TRACEPOINT_EVENT_CODE(name, proto, args, _locvar, _code_pre, fields, _code_post) \
 	LTTNG_TRACEPOINT_EVENT_CODE_MAP(name, name,			\
+			     PARAMS(proto),				\
+			     PARAMS(args),				\
+			     PARAMS(_locvar),				\
+			     PARAMS(_code_pre),				\
+			     PARAMS(fields),				\
+			     PARAMS(_code_post))
+
+#undef LTTNG_TRACEPOINT_EVENT_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CODE_MAYSLEEP(name, proto, args, _locvar, _code_pre, fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CODE_MAP_MAYSLEEP(name, name,			\
 			     PARAMS(proto),				\
 			     PARAMS(args),				\
 			     PARAMS(_locvar),				\
@@ -89,9 +124,20 @@
 			PARAMS(args),					\
 			PARAMS(fields))
 
+#undef LTTNG_TRACEPOINT_EVENT_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_MAYSLEEP(name, proto, args, fields)	\
+	LTTNG_TRACEPOINT_EVENT_MAP_MAYSLEEP(name, name,			\
+			PARAMS(proto),					\
+			PARAMS(args),					\
+			PARAMS(fields))
+
 #undef LTTNG_TRACEPOINT_EVENT_NOARGS
 #define LTTNG_TRACEPOINT_EVENT_NOARGS(name, fields)			\
 	LTTNG_TRACEPOINT_EVENT_MAP_NOARGS(name, name, PARAMS(fields))
+
+#undef LTTNG_TRACEPOINT_EVENT_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_NOARGS_MAYSLEEP(name, fields)		\
+	LTTNG_TRACEPOINT_EVENT_MAP_NOARGS_MAYSLEEP(name, name, PARAMS(fields))
 
 #undef LTTNG_TRACEPOINT_EVENT_INSTANCE
 #define LTTNG_TRACEPOINT_EVENT_INSTANCE(template, name, proto, args)	\
@@ -106,10 +152,18 @@
 	LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto), PARAMS(_args), , , \
 		PARAMS(_fields), )
 
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_MAYSLEEP(_name, _proto, _args, _fields) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, PARAMS(_proto), PARAMS(_args), , , \
+		PARAMS(_fields), )
+
 #undef LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS
 #define LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS(_name, _fields) \
 	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, , , PARAMS(_fields), )
 
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS_MAYSLEEP(_name, _fields) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, , , PARAMS(_fields), )
 
 /*
  * Stage 1 of the trace events.
@@ -170,6 +224,14 @@ void __event_template_proto___##_name(_proto);
 #define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, _code_post) \
 void __event_template_proto___##_name(void);
 
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto), PARAMS(_args), PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
 #include TRACE_INCLUDE(TRACE_INCLUDE_FILE)
 
 /*
@@ -203,6 +265,14 @@ void __event_notifier_template_proto___##_name(_proto);
 #undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS
 #define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, _code_post) \
 void __event_notifier_template_proto___##_name(void);
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto), PARAMS(_args), PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
 
 #include TRACE_INCLUDE(TRACE_INCLUDE_FILE)
 
@@ -472,6 +542,14 @@ void __event_notifier_template_proto___##_name(void);
 #define LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
 	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, PARAMS(_fields), _code_post)
 
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto), PARAMS(_args), PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
 #undef LTTNG_TRACEPOINT_ENUM
 #define LTTNG_TRACEPOINT_ENUM(_name, _values)						\
 	static const struct lttng_enum_desc __enum_##_name = {				\
@@ -502,6 +580,14 @@ static void __event_probe__##_name(void *__data, _proto);
 #define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, _code_post) \
 static void __event_probe__##_name(void *__data);
 
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto), PARAMS(_args), PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
 #include TRACE_INCLUDE(TRACE_INCLUDE_FILE)
 
 /*
@@ -523,6 +609,14 @@ static void __event_notifier_probe__##_name(void *__data, _proto);
 #undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS
 #define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, _code_post) \
 static void __event_notifier_probe__##_name(void *__data);
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto), PARAMS(_args), PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
 
 #include TRACE_INCLUDE(TRACE_INCLUDE_FILE)
 
@@ -647,6 +741,14 @@ error:									      \
 	__attribute__((unused));					      \
 	return -1;							      \
 }
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto), PARAMS(_args), PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
 
 #include TRACE_INCLUDE(TRACE_INCLUDE_FILE)
 
@@ -841,6 +943,14 @@ void __event_prepare_interpreter_stack__##_name(char *__stack_data,		      \
 	_fields								      \
 }
 
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto), PARAMS(_args), PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
 #include TRACE_INCLUDE(TRACE_INCLUDE_FILE)
 
 /*
@@ -928,6 +1038,14 @@ static inline size_t __event_get_align__##_name(void *__tp_locvar)	      \
 	_fields								      \
 	return __event_align;						      \
 }
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto), PARAMS(_args), PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, _fields, _code_post) \
+	LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
 
 #include TRACE_INCLUDE(TRACE_INCLUDE_FILE)
 

@@ -33,9 +33,24 @@
 #define LTTNG_TRACEPOINT_EVENT_MAP_NOARGS(name, map, fields) \
 	_LTTNG_INSTRUMENTATION(DECLARE_TRACE_NOARGS(name))
 
+#define LTTNG_TRACEPOINT_EVENT_MAYSLEEP(name, proto, args, fields) \
+	_LTTNG_INSTRUMENTATION(DECLARE_TRACE(name, PARAMS(proto), PARAMS(args)))
+#define LTTNG_TRACEPOINT_EVENT_CODE_MAYSLEEP(name, proto, args, _locvar, _code_pre, fields, _code_post) \
+	_LTTNG_INSTRUMENTATION(DECLARE_TRACE(name, PARAMS(proto), PARAMS(args)))
+#define LTTNG_TRACEPOINT_EVENT_CODE_MAP_MAYSLEEP(name, map, proto, args, _locvar, _code_pre, fields, _code_post) \
+	_LTTNG_INSTRUMENTATION(DECLARE_TRACE(name, PARAMS(proto), PARAMS(args)))
+#define LTTNG_TRACEPOINT_EVENT_MAP_MAYSLEEP(name, map, proto, args, fields) \
+	_LTTNG_INSTRUMENTATION(DECLARE_TRACE(name, PARAMS(proto), PARAMS(args)))
+#define LTTNG_TRACEPOINT_EVENT_MAP_NOARGS_MAYSLEEP(name, map, fields) \
+	_LTTNG_INSTRUMENTATION(DECLARE_TRACE_NOARGS(name))
+
 #define LTTNG_TRACEPOINT_EVENT_CLASS(name, proto, args, fields)
 #define LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post)
 #define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, _code_post)
+
+#define LTTNG_TRACEPOINT_EVENT_CLASS_MAYSLEEP(name, proto, args, fields)
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post)
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, _fields, _code_post)
 
 #define LTTNG_TRACEPOINT_EVENT_INSTANCE(template, name, proto, args) \
 	_LTTNG_INSTRUMENTATION(DECLARE_TRACE(name, PARAMS(proto), PARAMS(args)))

@@ -13,6 +13,12 @@
 #undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS
 #define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, _code_post)
 
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post)
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, _fields, _code_post)
+
 #undef LTTNG_TRACEPOINT_EVENT_INSTANCE_MAP
 #define LTTNG_TRACEPOINT_EVENT_INSTANCE_MAP(_template, _name, _map, _proto, _args)
 
