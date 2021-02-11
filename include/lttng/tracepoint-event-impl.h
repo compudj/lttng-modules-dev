@@ -1182,8 +1182,8 @@ static inline size_t __event_get_align__##_name(void *__tp_locvar)	      \
  * 2*sizeof(unsigned long) for all supported architectures.
  * Perform UNION (||) of filter runtime list.
  */
-#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE
-#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
+#undef _LTTNG_TRACEPOINT_EVENT_CLASS_CODE
+#define _LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post, tp_flags) \
 static void __event_probe__##_name(void *__data, _proto)		      \
 {									      \
 	struct probe_local_vars { _locvar };				      \
@@ -1239,9 +1239,11 @@ static void __event_probe__##_name(void *__data, _proto)		      \
 	if (__lf && likely(!lttng_id_tracker_lookup(__lf,		      \
 			lttng_current_vgid())))				      \
 		return;							      \
+	_code_pre							      \
+	if ((tp_flags) & TRACEPOINT_MAYSLEEP)				      \
+		preempt_disable_notrace();				      \
 	__orig_dynamic_len_offset = this_cpu_ptr(&lttng_dynamic_len_stack)->offset; \
 	__dynamic_len_idx = __orig_dynamic_len_offset;			      \
-	_code_pre							      \
 	if (unlikely(!list_empty(&__event->filter_bytecode_runtime_head))) {	      \
 		struct lttng_bytecode_runtime *bc_runtime;		      \
 		int __filter_record = __event->has_enablers_without_bytecode; \
@@ -1272,14 +1274,32 @@ static void __event_probe__##_name(void *__data, _proto)		      \
 	_fields								      \
 	__chan->ops->event_commit(&__ctx);				      \
 __post:									      \
-	_code_post							      \
 	barrier();	/* use before un-reserve. */			      \
 	this_cpu_ptr(&lttng_dynamic_len_stack)->offset = __orig_dynamic_len_offset; \
+	if ((tp_flags) & TRACEPOINT_MAYSLEEP)				      \
+		preempt_enable_notrace();				      \
+	_code_post							      \
 	return;								      \
 }
 
-#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS
-#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, _code_post) \
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, _proto, _args, _locvar,      \
+		_code_pre, _fields, _code_post)				      \
+	_LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto),	      \
+				PARAMS(_args), PARAMS(_locvar),		      \
+				PARAMS(_code_pre), PARAMS(_fields),	      \
+				PARAMS(_code_post), 0)
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args,      \
+		_locvar, _code_pre, _fields, _code_post)		      \
+	_LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto),	      \
+				PARAMS(_args), PARAMS(_locvar),		      \
+				PARAMS(_code_pre), PARAMS(_fields),	      \
+				PARAMS(_code_post), TRACEPOINT_MAYSLEEP)
+
+#undef _LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS
+#define _LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, _code_post, tp_flags) \
 static void __event_probe__##_name(void *__data)			      \
 {									      \
 	struct probe_local_vars { _locvar };				      \
@@ -1335,9 +1355,11 @@ static void __event_probe__##_name(void *__data)			      \
 	if (__lf && likely(!lttng_id_tracker_lookup(__lf,		      \
 			lttng_current_vgid())))				      \
 		return;							      \
+	_code_pre							      \
+	if ((tp_flags) & TRACEPOINT_MAYSLEEP)				      \
+		preempt_disable_notrace();				      \
 	__orig_dynamic_len_offset = this_cpu_ptr(&lttng_dynamic_len_stack)->offset; \
 	__dynamic_len_idx = __orig_dynamic_len_offset;			      \
-	_code_pre							      \
 	if (unlikely(!list_empty(&__event->filter_bytecode_runtime_head))) {	      \
 		struct lttng_bytecode_runtime *bc_runtime;		      \
 		int __filter_record = __event->has_enablers_without_bytecode; \
@@ -1368,11 +1390,27 @@ static void __event_probe__##_name(void *__data)			      \
 	_fields								      \
 	__chan->ops->event_commit(&__ctx);				      \
 __post:									      \
-	_code_post							      \
 	barrier();	/* use before un-reserve. */			      \
 	this_cpu_ptr(&lttng_dynamic_len_stack)->offset = __orig_dynamic_len_offset; \
+	if ((tp_flags) & TRACEPOINT_MAYSLEEP)				      \
+		preempt_enable_notrace();				      \
+	_code_post							      \
 	return;								      \
 }
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, \
+		_code_post)						      \
+	_LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar),     \
+				PARAMS(_code_pre), PARAMS(_fields),	      \
+				PARAMS(_code_post), 0)
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, \
+		_fields, _code_post)					      \
+	_LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar),     \
+				PARAMS(_code_pre), PARAMS(_fields),	      \
+				PARAMS(_code_post), TRACEPOINT_MAYSLEEP)
 
 #include TRACE_INCLUDE(TRACE_INCLUDE_FILE)
 
@@ -1412,8 +1450,8 @@ __post:									      \
  * 2*sizeof(unsigned long) for all supported architectures.
  * Perform UNION (||) of filter runtime list.
  */
-#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE
-#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
+#undef _LTTNG_TRACEPOINT_EVENT_CLASS_CODE
+#define _LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post, tp_flags) \
 static void __event_notifier_probe__##_name(void *__data, _proto)	      \
 {									      \
 	struct probe_local_vars { _locvar };				      \
@@ -1434,6 +1472,8 @@ static void __event_notifier_probe__##_name(void *__data, _proto)	      \
 	if (unlikely(!READ_ONCE(__event_notifier->enabled)))		      \
 		return;							      \
 	_code_pre							      \
+	if ((tp_flags) & TRACEPOINT_MAYSLEEP)				      \
+		preempt_disable_notrace();				      \
 	if (unlikely(!list_empty(&__event_notifier->filter_bytecode_runtime_head))) {	\
 		struct lttng_bytecode_runtime *bc_runtime;		      \
 		int __filter_record = __event_notifier->has_enablers_without_bytecode;	\
@@ -1459,12 +1499,30 @@ static void __event_notifier_probe__##_name(void *__data, _proto)	      \
 			__stackvar.__interpreter_stack_data);		      \
 									      \
 __post:									      \
+	if ((tp_flags) & TRACEPOINT_MAYSLEEP)				      \
+		preempt_enable_notrace();				      \
 	_code_post							      \
 	return;								      \
 }
 
-#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS
-#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, _code_post) \
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, _proto, _args, _locvar,      \
+		_code_pre, _fields, _code_post)				      \
+	_LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto),	      \
+				PARAMS(_args), PARAMS(_locvar),		      \
+				PARAMS(_code_pre), PARAMS(_fields),	      \
+				PARAMS(_code_post), 0)
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_MAYSLEEP(_name, _proto, _args,      \
+		_locvar, _code_pre, _fields, _code_post)		      \
+	_LTTNG_TRACEPOINT_EVENT_CLASS_CODE(_name, PARAMS(_proto),	      \
+				PARAMS(_args), PARAMS(_locvar),		      \
+				PARAMS(_code_pre), PARAMS(_fields),	      \
+				PARAMS(_code_post), TRACEPOINT_MAYSLEEP)
+
+#undef _LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS
+#define _LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, _code_post, tp_flags) \
 static void __event_notifier_probe__##_name(void *__data)		      \
 {									      \
 	struct probe_local_vars { _locvar };				      \
@@ -1485,6 +1543,8 @@ static void __event_notifier_probe__##_name(void *__data)		      \
 	if (unlikely(!READ_ONCE(__event_notifier->enabled)))		      \
 		return;							      \
 	_code_pre							      \
+	if ((tp_flags) & TRACEPOINT_MAYSLEEP)				      \
+		preempt_disable_notrace();				      \
 	if (unlikely(!list_empty(&__event_notifier->filter_bytecode_runtime_head))) {	\
 		struct lttng_bytecode_runtime *bc_runtime;		      \
 		int __filter_record = __event_notifier->has_enablers_without_bytecode;	\
@@ -1509,9 +1569,25 @@ static void __event_notifier_probe__##_name(void *__data)		      \
 			&__lttng_probe_ctx,				      \
 			__stackvar.__interpreter_stack_data);		      \
 __post:									      \
+	if ((tp_flags) & TRACEPOINT_MAYSLEEP)				      \
+		preempt_enable_notrace();				      \
 	_code_post							      \
 	return;								      \
 }
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, _locvar, _code_pre, _fields, \
+		_code_post)						      \
+	_LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar),     \
+				PARAMS(_code_pre), PARAMS(_fields),	      \
+				PARAMS(_code_post), 0)
+
+#undef LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP
+#define LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS_MAYSLEEP(_name, _locvar, _code_pre, \
+		_fields, _code_post)					      \
+	_LTTNG_TRACEPOINT_EVENT_CLASS_CODE_NOARGS(_name, PARAMS(_locvar),     \
+				PARAMS(_code_pre), PARAMS(_fields),	      \
+				PARAMS(_code_post), TRACEPOINT_MAYSLEEP)
 
 #include TRACE_INCLUDE(TRACE_INCLUDE_FILE)
 /*
