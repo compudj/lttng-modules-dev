@@ -1142,17 +1142,75 @@ SC_LTTNG_TRACEPOINT_ENUM(lttng_file_mode,
 	)
 )
 
+#ifndef ONCE_LTTNG_SYSCALL_OPENAT
+#define ONCE_LTTNG_SYSCALL_OPENAT
+
+#define LTTNG_SYSCALL_INSTRUMENTATION_OPENAT_FILENAME_LEN_MAX	4096
+
+enum lttng_syscall_openat_filename_condition {
+	LTTNG_FILENAME_CONDITION_OK = 0,
+	LTTNG_FILENAME_CONDITION_MISSING = 1,
+	LTTNG_FILENAME_CONDITION_TRUNCATED = 2,
+};
+
+#endif /* ONCE_LTTNG_SYSCALL_OPENAT */
+
+SC_LTTNG_TRACEPOINT_ENUM(openat_filename_condition,
+	TP_ENUM_VALUES(
+		ctf_enum_value("OK", LTTNG_FILENAME_CONDITION_OK)
+		ctf_enum_value("MISSING", LTTNG_FILENAME_CONDITION_MISSING)
+		ctf_enum_value("TRUNCATED", LTTNG_FILENAME_CONDITION_TRUNCATED)
+	)
+)
+
 #define OVERRIDE_32_openat
 #define OVERRIDE_64_openat
-SC_LTTNG_TRACEPOINT_EVENT(openat,
+SC_LTTNG_TRACEPOINT_EVENT_CODE(openat,
 	TP_PROTO(sc_exit(long ret,) int dfd, const char * filename, int flags, umode_t mode),
 	TP_ARGS(sc_exit(ret,) dfd, filename, flags, mode),
+	TP_locvar(
+		char *kfilename;
+		size_t kfilename_len;	/* Includes terminating \0 (if one present). */
+		size_t copy_len;
+		uint8_t filename_condition;
+	),
+	TP_code_pre(
+		tp_locvar->filename_condition = LTTNG_FILENAME_CONDITION_OK;
+		tp_locvar->kfilename = NULL;
+
+		tp_locvar->kfilename_len = strnlen_user(filename,
+				LTTNG_SYSCALL_INSTRUMENTATION_OPENAT_FILENAME_LEN_MAX);
+		if (tp_locvar->kfilename_len > LTTNG_SYSCALL_INSTRUMENTATION_OPENAT_FILENAME_LEN_MAX) {
+			tp_locvar->filename_condition = LTTNG_FILENAME_CONDITION_TRUNCATED;
+			tp_locvar->kfilename_len--;
+		} else if (!tp_locvar->kfilename_len) {
+			tp_locvar->filename_condition = LTTNG_FILENAME_CONDITION_MISSING;
+			goto skip_filename;
+		}
+		tp_locvar->kfilename = kmalloc(tp_locvar->kfilename_len, GFP_KERNEL);
+		if (!tp_locvar->kfilename) {
+			tp_locvar->filename_condition = LTTNG_FILENAME_CONDITION_MISSING;
+			goto skip_filename;
+		}
+		tp_locvar->copy_len = strncpy_from_user(tp_locvar->kfilename, filename, tp_locvar->kfilename_len);
+		if (tp_locvar->copy_len != tp_locvar->kfilename_len - 1)
+			tp_locvar->filename_condition = LTTNG_FILENAME_CONDITION_TRUNCATED;
+		/* Guarantee NULL-terminating character. */
+		tp_locvar->kfilename[tp_locvar->copy_len] = '\0';
+	skip_filename:
+		;
+	),
 	TP_FIELDS(
 		sc_exit(ctf_integer(long, ret, ret))
 		sc_in(ctf_integer(int, dfd, dfd))
-		sc_in(ctf_user_string(filename, filename))
+		sc_in(ctf_string(filename, tp_locvar->kfilename ? : ""))
+		sc_in(ctf_enum(openat_filename_condition, uint8_t, filename_condition,
+			       tp_locvar->filename_condition))
 		sc_in(ctf_enum(lttng_file_status_flags, int, flags, flags))
 		sc_in(ctf_enum(lttng_file_mode, umode_t, mode, mode))
+	),
+	TP_code_post(
+		kfree(tp_locvar->kfilename);
 	)
 )
 
