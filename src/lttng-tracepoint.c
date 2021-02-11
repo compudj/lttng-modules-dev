@@ -180,7 +180,10 @@ int lttng_tracepoint_probe_register(const char *name, void *probe, void *data)
 		goto end;
 	e->refcount++;
 	if (e->tp) {
-		ret = tracepoint_probe_register(e->tp, probe, data);
+		if (e->tp->flags & TRACEPOINT_MAYFAULT)
+			ret = tracepoint_probe_register_mayfault(e->tp, probe, data);
+		else
+			ret = tracepoint_probe_register(e->tp, probe, data);
 		WARN_ON_ONCE(ret);
 		ret = 0;
 	}

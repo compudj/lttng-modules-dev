@@ -132,14 +132,14 @@ typedef __kernel_old_time_t time_t;
 #undef TP_PROBE_CB
 #define TP_PROBE_CB(_template)		&syscall_entry_event_probe
 #define SC_LTTNG_TRACEPOINT_EVENT(_name, _proto, _args, _fields) \
-	LTTNG_TRACEPOINT_EVENT(syscall_entry_##_name, PARAMS(_proto), PARAMS(_args), \
+	LTTNG_TRACEPOINT_EVENT_MAYFAULT(syscall_entry_##_name, PARAMS(_proto), PARAMS(_args), \
 		PARAMS(_fields))
 #define SC_LTTNG_TRACEPOINT_EVENT_CODE(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
-	LTTNG_TRACEPOINT_EVENT_CODE(syscall_entry_##_name, PARAMS(_proto), PARAMS(_args), \
+	LTTNG_TRACEPOINT_EVENT_CODE_MAYFAULT(syscall_entry_##_name, PARAMS(_proto), PARAMS(_args), \
 		PARAMS(_locvar), PARAMS(_code_pre),				\
 		PARAMS(_fields), PARAMS(_code_post))
 #define SC_LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS(_name, _fields) \
-	LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS(syscall_entry_##_name, PARAMS(_fields))
+	LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS_MAYFAULT(syscall_entry_##_name, PARAMS(_fields))
 #define SC_LTTNG_TRACEPOINT_EVENT_INSTANCE_NOARGS(_template, _name)		\
 	LTTNG_TRACEPOINT_EVENT_INSTANCE_NOARGS(syscall_entry_##_template, syscall_entry_##_name)
 /* Enumerations only defined at first inclusion. */
@@ -169,13 +169,13 @@ typedef __kernel_old_time_t time_t;
 #define TP_PROBE_CB(_template)		&syscall_entry_event_probe
 #define LTTNG_SC_COMPAT
 #define SC_LTTNG_TRACEPOINT_EVENT(_name, _proto, _args, _fields) \
-	LTTNG_TRACEPOINT_EVENT(compat_syscall_entry_##_name, PARAMS(_proto), PARAMS(_args), \
+	LTTNG_TRACEPOINT_EVENT_MAYFAULT(compat_syscall_entry_##_name, PARAMS(_proto), PARAMS(_args), \
 		PARAMS(_fields))
 #define SC_LTTNG_TRACEPOINT_EVENT_CODE(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
-	LTTNG_TRACEPOINT_EVENT_CODE(compat_syscall_entry_##_name, PARAMS(_proto), PARAMS(_args), \
+	LTTNG_TRACEPOINT_EVENT_CODE_MAYFAULT(compat_syscall_entry_##_name, PARAMS(_proto), PARAMS(_args), \
 		PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
 #define SC_LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS(_name, _fields) \
-	LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS(compat_syscall_entry_##_name, PARAMS(_fields))
+	LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS_MAYFAULT(compat_syscall_entry_##_name, PARAMS(_fields))
 #define SC_LTTNG_TRACEPOINT_EVENT_INSTANCE_NOARGS(_template, _name)		\
 	LTTNG_TRACEPOINT_EVENT_INSTANCE_NOARGS(compat_syscall_entry_##_template, \
 		compat_syscall_entry_##_name)
@@ -217,13 +217,13 @@ typedef __kernel_old_time_t time_t;
 /* Hijack probe callback for system call exit */
 #define TP_PROBE_CB(_template)		&syscall_exit_event_probe
 #define SC_LTTNG_TRACEPOINT_EVENT(_name, _proto, _args, _fields) \
-	LTTNG_TRACEPOINT_EVENT(syscall_exit_##_name, PARAMS(_proto), PARAMS(_args), \
+	LTTNG_TRACEPOINT_EVENT_MAYFAULT(syscall_exit_##_name, PARAMS(_proto), PARAMS(_args), \
 		PARAMS(_fields))
 #define SC_LTTNG_TRACEPOINT_EVENT_CODE(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
-	LTTNG_TRACEPOINT_EVENT_CODE(syscall_exit_##_name, PARAMS(_proto), PARAMS(_args), \
+	LTTNG_TRACEPOINT_EVENT_CODE_MAYFAULT(syscall_exit_##_name, PARAMS(_proto), PARAMS(_args), \
 		PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
 #define SC_LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS(_name, _fields) \
-	LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS(syscall_exit_##_name, PARAMS(_fields))
+	LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS_MAYFAULT(syscall_exit_##_name, PARAMS(_fields))
 #define SC_LTTNG_TRACEPOINT_EVENT_INSTANCE_NOARGS(_template, _name) 		\
 	LTTNG_TRACEPOINT_EVENT_INSTANCE_NOARGS(syscall_exit_##_template,	\
 		syscall_exit_##_name)
@@ -253,13 +253,13 @@ typedef __kernel_old_time_t time_t;
 #define TP_PROBE_CB(_template)		&syscall_exit_event_probe
 #define LTTNG_SC_COMPAT
 #define SC_LTTNG_TRACEPOINT_EVENT(_name, _proto, _args, _fields) \
-	LTTNG_TRACEPOINT_EVENT(compat_syscall_exit_##_name, PARAMS(_proto), PARAMS(_args), \
+	LTTNG_TRACEPOINT_EVENT_MAYFAULT(compat_syscall_exit_##_name, PARAMS(_proto), PARAMS(_args), \
 		PARAMS(_fields))
 #define SC_LTTNG_TRACEPOINT_EVENT_CODE(_name, _proto, _args, _locvar, _code_pre, _fields, _code_post) \
-	LTTNG_TRACEPOINT_EVENT_CODE(compat_syscall_exit_##_name, PARAMS(_proto), PARAMS(_args), \
+	LTTNG_TRACEPOINT_EVENT_CODE_MAYFAULT(compat_syscall_exit_##_name, PARAMS(_proto), PARAMS(_args), \
 		PARAMS(_locvar), PARAMS(_code_pre), PARAMS(_fields), PARAMS(_code_post))
 #define SC_LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS(_name, _fields) \
-	LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS(compat_syscall_exit_##_name, PARAMS(_fields))
+	LTTNG_TRACEPOINT_EVENT_CLASS_NOARGS_MAYFAULT(compat_syscall_exit_##_name, PARAMS(_fields))
 #define SC_LTTNG_TRACEPOINT_EVENT_INSTANCE_NOARGS(_template, _name)		\
 	LTTNG_TRACEPOINT_EVENT_INSTANCE_NOARGS(compat_syscall_exit_##_template, \
 		compat_syscall_exit_##_name)
