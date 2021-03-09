@@ -239,7 +239,8 @@ struct lttng_counter_transport *lttng_counter_transport_find(const char *name)
 static
 struct lttng_counter *lttng_kernel_counter_create(
 		const char *counter_transport_name,
-		size_t number_dimensions, const size_t *dimensions_sizes)
+		size_t number_dimensions, const size_t *dimensions_sizes,
+		bool coalesce_hits)
 {
 	struct lttng_counter_transport *counter_transport = NULL;
 	struct lttng_counter *counter = NULL;
@@ -261,6 +262,7 @@ struct lttng_counter *lttng_kernel_counter_create(
 		goto nomem;
 	container = lttng_counter_get_event_container(counter);
 	container->type = LTTNG_EVENT_CONTAINER_COUNTER;
+	container->coalesce_hits = coalesce_hits;
 	/* Create event notifier error counter. */
 	counter->ops = &counter_transport->ops;
 	counter->transport = counter_transport;
@@ -315,7 +317,7 @@ int lttng_event_notifier_group_set_error_counter(
 	}
 
 	counter = lttng_kernel_counter_create(counter_transport_name,
-			1, &counter_len);
+			1, &counter_len, false);
 	if (!counter) {
 		ret = -EINVAL;
 		goto error;
@@ -406,13 +408,15 @@ notransport:
 struct lttng_counter *lttng_session_create_counter(
 	struct lttng_session *session,
 	const char *counter_transport_name,
-	size_t number_dimensions, const size_t *dimensions_sizes)
+	size_t number_dimensions, const size_t *dimensions_sizes,
+	bool coalesce_hits)
 {
 	struct lttng_counter *counter;
 	struct lttng_event_container *container;
 
 	counter = lttng_kernel_counter_create(counter_transport_name,
-			number_dimensions, dimensions_sizes);
+			number_dimensions, dimensions_sizes,
+			coalesce_hits);
 	if (!counter) {
 		goto counter_error;
 	}
@@ -885,6 +889,12 @@ struct lttng_channel *lttng_channel_create(struct lttng_session *session,
 	container->session = session;
 	container->tstate = 1;
 	container->enabled = 1;
+	/*
+	 * The ring buffer always coalesces hits from various event
+	 * enablers matching a given event to a single event record within the
+	 * ring buffer.
+	 */
+	container->coalesce_hits = true;
 
 	chan->id = session->free_chan_id++;
 	chan->ops = &transport->ops;
@@ -1071,6 +1081,24 @@ int format_event_key(char *key_string, const struct lttng_counter_key *key,
 	return 0;
 }
 
+static
+bool match_event_enablers_token(struct lttng_event_container *container,
+		struct lttng_event *event, uint64_t token)
+{
+	struct lttng_enabler_ref *enabler_ref;
+
+	if (container->coalesce_hits)
+		return true;
+
+	list_for_each_entry(enabler_ref, &event->enablers_ref_head, node) {
+		struct lttng_enabler *enabler = enabler_ref->ref;
+
+		if (enabler->user_token == token)
+			return true;
+	}
+	return false;
+}
+
 /*
  * Supports event creation while tracing session is active.
  * Needs to be called with sessions mutex held.
@@ -1080,7 +1108,8 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 				const struct lttng_counter_key *key,
 				void *filter,
 				const struct lttng_event_desc *event_desc,
-				enum lttng_kernel_instrumentation itype)
+				enum lttng_kernel_instrumentation itype,
+				uint64_t token)
 {
 	struct lttng_session *session;
 	struct lttng_event *event;
@@ -1116,7 +1145,8 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 	name_head = utils_borrow_hash_table_bucket(session->events_name_ht.table,
 		LTTNG_EVENT_HT_SIZE, event_name);
 	lttng_hlist_for_each_entry(event, name_head, name_hlist) {
-		bool same_event = false, same_container = false, same_key = false;
+		bool same_event = false, same_container = false, same_key = false,
+			same_token = false;
 
 		WARN_ON_ONCE(!event->desc);
 		if (event_desc) {
@@ -1126,11 +1156,14 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 			if (!strcmp(event_name, event->desc->name))
 				same_event = true;
 		}
-		if (container == event->container)
+		if (container == event->container) {
 			same_container = true;
+			if (match_event_enablers_token(container, event, token))
+				same_token = true;
+		}
 		if (key_string[0] == '\0' || !strcmp(key_string, event->key))
 			same_key = true;
-		if (same_event && same_container && same_key) {
+		if (same_event && same_container && same_key && same_token) {
 			ret = -EEXIST;
 			goto exist;
 		}
@@ -1190,7 +1223,7 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 			ret = -EINVAL;
 			goto register_error;
 		}
-		event->u.kprobe.user_token = event_param->token;
+		event->u.kprobe.user_token = token;
 		ret = try_module_get(event->desc->owner);
 		WARN_ON_ONCE(!ret);
 		break;
@@ -1205,7 +1238,7 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 		 */
 		event->enabled = 0;
 		event->registered = 1;
-		event->u.kretprobe.user_token = event_param->token;
+		event->u.kretprobe.user_token = token;
 		event_return =
 			kmem_cache_zalloc(event_cache, GFP_KERNEL);
 		if (!event_return) {
@@ -1222,7 +1255,7 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 		event_return->enabled = 0;
 		event_return->registered = 1;
 		event_return->instrumentation = itype;
-		event_return->u.kretprobe.user_token = event_param->token;
+		event_return->u.kretprobe.user_token = token;
 		/*
 		 * Populate lttng_event structure before kretprobe registration.
 		 */
@@ -1303,7 +1336,7 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 		 */
 		event->enabled = 0;
 		event->registered = 1;
-		event->u.uprobe.user_token = event_param->token;
+		event->u.uprobe.user_token = token;
 
 		/*
 		 * Populate lttng_event structure before event
@@ -1593,13 +1626,14 @@ struct lttng_event *lttng_event_create(struct lttng_event_container *container,
 				const struct lttng_counter_key *key,
 				void *filter,
 				const struct lttng_event_desc *event_desc,
-				enum lttng_kernel_instrumentation itype)
+				enum lttng_kernel_instrumentation itype,
+				uint64_t token)
 {
 	struct lttng_event *event;
 
 	mutex_lock(&sessions_mutex);
 	event = _lttng_event_create(container, event_param, key, filter, event_desc,
-				itype);
+				itype, token);
 	mutex_unlock(&sessions_mutex);
 	return event;
 }
@@ -2284,7 +2318,8 @@ void lttng_create_tracepoint_event_if_missing(struct lttng_event_enabler *event_
 			/* Try to create an event for this event probe. */
 			event = _lttng_event_create(event_enabler->container,
 					NULL, &event_enabler->key, NULL, desc,
-					LTTNG_KERNEL_TRACEPOINT);
+					LTTNG_KERNEL_TRACEPOINT,
+					event_enabler->base.user_token);
 			/* Skip if event is already found. */
 			if (IS_ERR(event) && PTR_ERR(event) == -EEXIST)
 				continue;

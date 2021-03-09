@@ -721,7 +721,7 @@ int lttng_abi_create_event(struct file *event_container_file,
 		 */
 		event = lttng_event_create(container, event_param, key,
 				NULL, NULL,
-				event_param->instrumentation);
+				event_param->instrumentation, event_param->token);
 		if (IS_ERR(event)) {
 			ret = PTR_ERR(event);
 			goto event_error;
@@ -1070,7 +1070,8 @@ long lttng_abi_session_create_counter(
 
 	counter = lttng_session_create_counter(session,
 			counter_transport_name,
-			number_dimensions, dimension_sizes);
+			number_dimensions, dimension_sizes,
+			counter_conf->coalesce_hits);
 	if (!counter) {
 		ret = -EINVAL;
 		goto counter_error;

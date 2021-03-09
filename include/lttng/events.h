@@ -647,6 +647,7 @@ struct lttng_event_container {
 	unsigned int sys_enter_registered:1,
 		sys_exit_registered:1,
 		tstate:1;			/* Transient enable state */
+	bool coalesce_hits;
 };
 
 struct lttng_channel {
@@ -924,17 +925,20 @@ struct lttng_event *lttng_event_create(struct lttng_event_container *container,
 				const struct lttng_counter_key *key,
 				void *filter,
 				const struct lttng_event_desc *event_desc,
-				enum lttng_kernel_instrumentation itype);
+				enum lttng_kernel_instrumentation itype,
+				uint64_t user_token);
 struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 				struct lttng_kernel_event *event_param,
 				const struct lttng_counter_key *key,
 				void *filter,
 				const struct lttng_event_desc *event_desc,
-				enum lttng_kernel_instrumentation itype);
+				enum lttng_kernel_instrumentation itype,
+				uint64_t user_token);
 struct lttng_counter *lttng_session_create_counter(
 	struct lttng_session *session,
 	const char *counter_transport_name,
-	size_t number_dimensions, const size_t *dimensions_sizes);
+	size_t number_dimensions, const size_t *dimensions_sizes,
+	bool coalesce_hits);
 
 struct lttng_event_notifier *lttng_event_notifier_create(
 				const struct lttng_event_desc *event_notifier_desc,

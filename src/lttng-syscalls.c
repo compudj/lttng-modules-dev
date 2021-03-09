@@ -1146,7 +1146,8 @@ int lttng_create_syscall_event_if_missing(const struct trace_syscall_entry *tabl
 		ev.name[LTTNG_KERNEL_SYM_NAME_LEN - 1] = '\0';
 		ev.instrumentation = LTTNG_KERNEL_SYSCALL;
 		event = _lttng_event_create(container, &ev, &event_enabler->key, filter,
-				desc, ev.instrumentation);
+				desc, ev.instrumentation,
+				event_enabler->base.user_token);
 		/* Skip if event is already found. */
 		if (IS_ERR(event) && PTR_ERR(event) == -EEXIST)
 			continue;
@@ -1220,7 +1221,8 @@ int lttng_syscalls_register_event(struct lttng_event_enabler *event_enabler, voi
 		ev.u.syscall.entryexit = LTTNG_KERNEL_SYSCALL_ENTRY;
 		ev.u.syscall.abi = LTTNG_KERNEL_SYSCALL_ABI_NATIVE;
 		event = _lttng_event_create(container, &ev, &event_enabler->key, filter,
-					desc, ev.instrumentation);
+					desc, ev.instrumentation,
+					event_enabler->base.user_token);
 		if (IS_ERR(event)) {
 			if (PTR_ERR(event) != -EEXIST)
 				return PTR_ERR(event);
@@ -1242,7 +1244,8 @@ int lttng_syscalls_register_event(struct lttng_event_enabler *event_enabler, voi
 		ev.u.syscall.entryexit = LTTNG_KERNEL_SYSCALL_ENTRY;
 		ev.u.syscall.abi = LTTNG_KERNEL_SYSCALL_ABI_COMPAT;
 		event = _lttng_event_create(container, &ev, &event_enabler->key, filter,
-					desc, ev.instrumentation);
+					desc, ev.instrumentation,
+					event_enabler->base.user_token);
 		if (IS_ERR(event)) {
 			if (PTR_ERR(event) != -EEXIST)
 				return PTR_ERR(event);
@@ -1264,7 +1267,8 @@ int lttng_syscalls_register_event(struct lttng_event_enabler *event_enabler, voi
 		ev.u.syscall.entryexit = LTTNG_KERNEL_SYSCALL_EXIT;
 		ev.u.syscall.abi = LTTNG_KERNEL_SYSCALL_ABI_COMPAT;
 		event = _lttng_event_create(container, &ev, &event_enabler->key,
-					filter, desc, ev.instrumentation);
+					filter, desc, ev.instrumentation,
+					event_enabler->base.user_token);
 		if (IS_ERR(event)) {
 			if (PTR_ERR(event) != -EEXIST)
 				return PTR_ERR(event);
@@ -1286,7 +1290,8 @@ int lttng_syscalls_register_event(struct lttng_event_enabler *event_enabler, voi
 		ev.u.syscall.entryexit = LTTNG_KERNEL_SYSCALL_EXIT;
 		ev.u.syscall.abi = LTTNG_KERNEL_SYSCALL_ABI_NATIVE;
 		event = _lttng_event_create(container, &ev, &event_enabler->key, filter,
-					desc, ev.instrumentation);
+					desc, ev.instrumentation,
+					event_enabler->base.user_token);
 		if (IS_ERR(event)) {
 			if (PTR_ERR(event) != -EEXIST)
 				return PTR_ERR(event);
