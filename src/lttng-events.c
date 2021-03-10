@@ -1185,9 +1185,7 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 		ret = -EMFILE;
 		goto full;
 	}
-
-	if (key)
-		strcpy(event->key, key_string);
+	strcpy(event->key, key_string);
 
 	switch (itype) {
 	case LTTNG_KERNEL_TRACEPOINT:
