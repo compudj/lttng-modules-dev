@@ -393,6 +393,12 @@ struct lttng_event {
 	struct hlist_node action_list;
 
 	char key[LTTNG_KEY_TOKEN_STRING_LEN_MAX];
+
+	/*
+	 * For non-coalesce-hit event containers, each event is
+	 * associated with a single event enabler user_token.
+	 */
+	uint64_t user_token;
 };
 
 // FIXME: Really similar to lttng_event above. Could those be merged ?
