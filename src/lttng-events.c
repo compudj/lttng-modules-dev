@@ -1150,7 +1150,7 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 {
 	struct lttng_session *session;
 	struct lttng_event *event;
-	const char *event_name;
+	char event_name[LTTNG_KERNEL_SYM_NAME_LEN];
 	struct hlist_head *name_head, *key_head;
 	char key_string[LTTNG_KEY_TOKEN_STRING_LEN_MAX];
 	int ret;
@@ -1158,16 +1158,41 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 	session = container->session;
 	switch (itype) {
 	case LTTNG_KERNEL_TRACEPOINT:
-		event_name = event_desc->name;
+		if (strlen(event_desc->name) >= LTTNG_KERNEL_SYM_NAME_LEN) {
+			ret = -EINVAL;
+			goto type_error;
+		}
+		strcpy(event_name, event_desc->name);
 		break;
 	case LTTNG_KERNEL_KPROBE:
 	case LTTNG_KERNEL_UPROBE:
-	case LTTNG_KERNEL_KRETPROBE:
-	case LTTNG_KERNEL_NOOP:
+		if (strlen(event_param->name) >= LTTNG_KERNEL_SYM_NAME_LEN) {
+			ret = -EINVAL;
+			goto type_error;
+		}
+		strcpy(event_name, event_param->name);
+		break;
 	case LTTNG_KERNEL_SYSCALL:
-		event_name = event_param->name;
+		if (strlen(event_param->name) >= LTTNG_KERNEL_SYM_NAME_LEN) {
+			ret = -EINVAL;
+			goto type_error;
+		}
+		strcpy(event_name, event_param->name);
+		break;
+	case LTTNG_KERNEL_KRETPROBE:
+		if (strlen(event_param->name) >= LTTNG_KERNEL_SYM_NAME_LEN) {
+			ret = -EINVAL;
+			goto type_error;
+		}
+		strcpy(event_name, event_param->name);
+		if (strlen(event_name) + strlen("_entry") >= LTTNG_KERNEL_SYM_NAME_LEN) {
+			ret = -EINVAL;
+			goto type_error;
+		}
+		strcat(event_name, "_entry");
 		break;
 	case LTTNG_KERNEL_FUNCTION:	/* Fall-through. */
+	case LTTNG_KERNEL_NOOP:		/* Fall-through. */
 	default:
 		WARN_ON_ONCE(1);
 		ret = -EINVAL;
@@ -1302,6 +1327,33 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 		event->enabled = 0;
 		event->registered = 1;
 		event->u.kretprobe.user_token = token;
+
+		/* Append descriptor to counter. */
+		switch (container->type) {
+		case LTTNG_EVENT_CONTAINER_COUNTER:
+		{
+			struct lttng_counter *counter;
+			const char *name = "<UNKNOWN>";
+			int ret;
+
+			counter = lttng_event_container_get_counter(container);
+			if (event->key[0])
+				name = event->key;
+			else
+				name = event_name;
+			ret = lttng_counter_append_descriptor(counter,
+					token, event->id,
+					name);
+			if (ret) {
+				WARN_ON_ONCE(1);
+			}
+			break;
+		}
+		case LTTNG_EVENT_CONTAINER_CHANNEL:
+		default:
+			break;
+		}
+
 		event_return =
 			kmem_cache_zalloc(event_cache, GFP_KERNEL);
 		if (!event_return) {
@@ -1310,6 +1362,17 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 		}
 		event_return->container = container;
 		event_return->filter = filter;
+
+		strcpy(event_name, event_param->name);
+		if (strlen(event_name) + strlen("_exit") >= LTTNG_KERNEL_SYM_NAME_LEN) {
+			ret = -EINVAL;
+			goto register_error;
+		}
+		strcat(event_name, "_exit");
+		if (format_event_key(key_string, key, event_name)) {
+			ret = -EINVAL;
+			goto register_error;
+		}
 		if (lttng_event_container_allocate_id(container, key_string, &event_return->id)) {
 			kmem_cache_free(event_cache, event_return);
 			ret = -EMFILE;
@@ -1319,6 +1382,7 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 		event_return->registered = 1;
 		event_return->instrumentation = itype;
 		event_return->u.kretprobe.user_token = token;
+		strcpy(event_return->key, key_string);
 		/*
 		 * Populate lttng_event structure before kretprobe registration.
 		 */
@@ -1338,6 +1402,32 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 		WARN_ON_ONCE(!ret);
 		ret = try_module_get(event->desc->owner);
 		WARN_ON_ONCE(!ret);
+
+		/* Append exit descriptor to counter. */
+		switch (container->type) {
+		case LTTNG_EVENT_CONTAINER_COUNTER:
+		{
+			struct lttng_counter *counter;
+			const char *name = "<UNKNOWN>";
+			int ret;
+
+			counter = lttng_event_container_get_counter(container);
+			if (event_return->key[0])
+				name = event_return->key;
+			else
+				name = event_name;
+			ret = lttng_counter_append_descriptor(counter,
+					token, event_return->id,
+					name);
+			if (ret) {
+				WARN_ON_ONCE(1);
+			}
+			break;
+		}
+		case LTTNG_EVENT_CONTAINER_CHANNEL:
+		default:
+			break;
+		}
 		switch (container->type) {
 		case LTTNG_EVENT_CONTAINER_CHANNEL:
 			ret = _lttng_event_metadata_statedump(session, event_return);
@@ -1356,7 +1446,6 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 		list_add(&event_return->list, &session->events);
 		break;
 	}
-	case LTTNG_KERNEL_NOOP:
 	case LTTNG_KERNEL_SYSCALL:
 		/*
 		 * Needs to be explicitly enabled after creation, since
@@ -1441,7 +1530,8 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 			break;
 		}
 		break;
-	case LTTNG_KERNEL_FUNCTION:	/* Fall-through */
+	case LTTNG_KERNEL_FUNCTION:	/* Fall-through. */
+	case LTTNG_KERNEL_NOOP:		/* Fall-through.*/
 	default:
 		WARN_ON_ONCE(1);
 		ret = -EINVAL;
