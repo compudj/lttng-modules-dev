@@ -1407,13 +1407,39 @@ struct lttng_event *_lttng_event_create(struct lttng_event_container *container,
 		 */
 		smp_wmb();
 
-		ret = lttng_uprobes_register_event(event_param->name,
+		ret = lttng_uprobes_register_event(event_name,
 				event_param->u.uprobe.fd,
 				event);
 		if (ret)
 			goto register_error;
 		ret = try_module_get(event->desc->owner);
 		WARN_ON_ONCE(!ret);
+
+		/* Append descriptor to counter. */
+		switch (container->type) {
+		case LTTNG_EVENT_CONTAINER_COUNTER:
+		{
+			struct lttng_counter *counter;
+			const char *name = "<UNKNOWN>";
+			int ret;
+
+			counter = lttng_event_container_get_counter(container);
+			if (event->key[0])
+				name = event->key;
+			else
+				name = event_name;
+			ret = lttng_counter_append_descriptor(counter,
+					token, event->id,
+					name);
+			if (ret) {
+				WARN_ON_ONCE(1);
+			}
+			break;
+		}
+		case LTTNG_EVENT_CONTAINER_CHANNEL:
+		default:
+			break;
+		}
 		break;
 	case LTTNG_KERNEL_FUNCTION:	/* Fall-through */
 	default:

@@ -33,8 +33,6 @@ int lttng_uprobes_event_handler_pre(struct uprobe_consumer *uc, struct pt_regs *
 		.interruptible = !lttng_regs_irqs_disabled(regs),
 	};
 	struct lttng_event_container *container = event->container;
-	struct lttng_channel *chan = lttng_event_container_get_channel(container);
-	struct lib_ring_buffer_ctx ctx;
 	int ret;
 
 	struct {
@@ -48,19 +46,36 @@ int lttng_uprobes_event_handler_pre(struct uprobe_consumer *uc, struct pt_regs *
 	if (unlikely(!LTTNG_READ_ONCE(event->enabled)))
 		return 0;
 
-	lib_ring_buffer_ctx_init(&ctx, chan->chan, &lttng_probe_ctx,
-		sizeof(payload), lttng_alignof(payload), -1);
+	switch (container->type) {
+	case LTTNG_EVENT_CONTAINER_CHANNEL:
+	{
+		struct lttng_channel *chan = lttng_event_container_get_channel(container);
+		struct lib_ring_buffer_ctx ctx;
 
-	ret = chan->ops->event_reserve(&ctx, event->id);
-	if (ret < 0)
-		return 0;
+		lib_ring_buffer_ctx_init(&ctx, chan->chan, &lttng_probe_ctx,
+			sizeof(payload), lttng_alignof(payload), -1);
 
-	/* Event payload. */
-	payload.ip = (unsigned long)instruction_pointer(regs);
+		ret = chan->ops->event_reserve(&ctx, event->id);
+		if (ret < 0)
+			return 0;
 
-	lib_ring_buffer_align_ctx(&ctx, lttng_alignof(payload));
-	chan->ops->event_write(&ctx, &payload, sizeof(payload));
-	chan->ops->event_commit(&ctx);
+		/* Event payload. */
+		payload.ip = (unsigned long)instruction_pointer(regs);
+
+		lib_ring_buffer_align_ctx(&ctx, lttng_alignof(payload));
+		chan->ops->event_write(&ctx, &payload, sizeof(payload));
+		chan->ops->event_commit(&ctx);
+		break;
+	}
+	case LTTNG_EVENT_CONTAINER_COUNTER:
+	{
+		struct lttng_counter *counter = lttng_event_container_get_counter(container);
+		size_t index = event->id;
+
+		(void) counter->ops->counter_add(counter->counter, &index, 1);
+		break;
+	}
+	}
 	return 0;
 }
 
