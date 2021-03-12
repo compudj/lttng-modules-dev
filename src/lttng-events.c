@@ -1092,6 +1092,50 @@ bool match_event_token(struct lttng_event_container *container,
 	return false;
 }
 
+static
+int lttng_counter_append_descriptor(struct lttng_counter *counter,
+		uint64_t user_token,
+		size_t index,
+		const char *key)
+{
+	struct lttng_counter_map *map = &counter->map;
+	struct lttng_counter_map_descriptor *last;
+	int ret = 0;
+
+	if (strlen(key) >= LTTNG_KERNEL_COUNTER_KEY_LEN) {
+		WARN_ON_ONCE(1);
+		return -EOVERFLOW;
+	}
+	mutex_lock(&map->lock);
+	if (map->nr_descriptors == map->alloc_len) {
+		struct lttng_counter_map_descriptor *new_table, *old_table;
+		size_t old_len = map->nr_descriptors;
+		size_t new_len = max_t(size_t, old_len + 1, map->alloc_len * 2);
+
+		old_table = map->descriptors;
+		new_table = lttng_kvzalloc(sizeof(struct lttng_counter_map_descriptor) * new_len,
+				GFP_KERNEL);
+		if (!new_table) {
+			ret = -ENOMEM;
+			goto unlock;
+		}
+
+		if (old_table)
+			memcpy(new_table, old_table, old_len * sizeof(struct lttng_counter_map_descriptor));
+
+		map->descriptors = new_table;
+		map->alloc_len = new_len;
+		lttng_kvfree(old_table);
+	}
+	last = &map->descriptors[map->nr_descriptors++];
+	last->user_token = user_token;
+	last->array_index = index;
+	strcpy(last->key, key);
+unlock:
+	mutex_unlock(&map->lock);
+	return ret;
+}
+
 /*
  * Supports event creation while tracing session is active.
  * Needs to be called with sessions mutex held.
@@ -2419,50 +2463,6 @@ void lttng_create_event_if_missing(struct lttng_event_enabler *event_enabler)
 		WARN_ON_ONCE(1);
 		break;
 	}
-}
-
-static
-int lttng_counter_append_descriptor(struct lttng_counter *counter,
-		uint64_t user_token,
-		size_t index,
-		const char *key)
-{
-	struct lttng_counter_map *map = &counter->map;
-	struct lttng_counter_map_descriptor *last;
-	int ret = 0;
-
-	if (strlen(key) >= LTTNG_KERNEL_COUNTER_KEY_LEN) {
-		WARN_ON_ONCE(1);
-		return -EOVERFLOW;
-	}
-	mutex_lock(&map->lock);
-	if (map->nr_descriptors == map->alloc_len) {
-		struct lttng_counter_map_descriptor *new_table, *old_table;
-		size_t old_len = map->nr_descriptors;
-		size_t new_len = max_t(size_t, old_len + 1, map->alloc_len * 2);
-
-		old_table = map->descriptors;
-		new_table = lttng_kvzalloc(sizeof(struct lttng_counter_map_descriptor) * new_len,
-				GFP_KERNEL);
-		if (!new_table) {
-			ret = -ENOMEM;
-			goto unlock;
-		}
-
-		if (old_table)
-			memcpy(new_table, old_table, old_len * sizeof(struct lttng_counter_map_descriptor));
-
-		map->descriptors = new_table;
-		map->alloc_len = new_len;
-		lttng_kvfree(old_table);
-	}
-	last = &map->descriptors[map->nr_descriptors++];
-	last->user_token = user_token;
-	last->array_index = index;
-	strcpy(last->key, key);
-unlock:
-	mutex_unlock(&map->lock);
-	return ret;
 }
 
 /*
