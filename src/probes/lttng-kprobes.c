@@ -27,8 +27,6 @@ int lttng_kprobes_event_handler_pre(struct kprobe *p, struct pt_regs *regs)
 		.interruptible = !lttng_regs_irqs_disabled(regs),
 	};
 	struct lttng_event_container *container = event->container;
-	struct lttng_channel *chan = lttng_event_container_get_channel(container);
-	struct lib_ring_buffer_ctx ctx;
 	int ret;
 	unsigned long data = (unsigned long) p->addr;
 
@@ -39,14 +37,31 @@ int lttng_kprobes_event_handler_pre(struct kprobe *p, struct pt_regs *regs)
 	if (unlikely(!LTTNG_READ_ONCE(event->enabled)))
 		return 0;
 
-	lib_ring_buffer_ctx_init(&ctx, chan->chan, &lttng_probe_ctx, sizeof(data),
-				 lttng_alignof(data), -1);
-	ret = chan->ops->event_reserve(&ctx, event->id);
-	if (ret < 0)
-		return 0;
-	lib_ring_buffer_align_ctx(&ctx, lttng_alignof(data));
-	chan->ops->event_write(&ctx, &data, sizeof(data));
-	chan->ops->event_commit(&ctx);
+	switch (container->type) {
+	case LTTNG_EVENT_CONTAINER_CHANNEL:
+	{
+		struct lttng_channel *chan = lttng_event_container_get_channel(container);
+		struct lib_ring_buffer_ctx ctx;
+
+		lib_ring_buffer_ctx_init(&ctx, chan->chan, &lttng_probe_ctx, sizeof(data),
+					 lttng_alignof(data), -1);
+		ret = chan->ops->event_reserve(&ctx, event->id);
+		if (ret < 0)
+			return 0;
+		lib_ring_buffer_align_ctx(&ctx, lttng_alignof(data));
+		chan->ops->event_write(&ctx, &data, sizeof(data));
+		chan->ops->event_commit(&ctx);
+		break;
+	}
+	case LTTNG_EVENT_CONTAINER_COUNTER:
+	{
+		struct lttng_counter *counter = lttng_event_container_get_counter(container);
+		size_t index = event->id;
+
+		(void) counter->ops->counter_add(counter->counter, &index, 1);
+		break;
+	}
+	}
 	return 0;
 }
 
