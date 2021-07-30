@@ -744,6 +744,84 @@ end:
 	return ret;
 }
 
+struct lttng_kernel_channel_buffer *lttng_kernel_alloc_channel_buffer(void)
+{
+	struct lttng_kernel_channel_buffer *lttng_chan_buf;
+	struct lttng_kernel_channel_common *lttng_chan_common;
+	struct lttng_kernel_channel_buffer_private *lttng_chan_buf_priv;
+
+	lttng_chan_buf = kzalloc(sizeof(struct lttng_kernel_channel_buffer), GFP_KERNEL);
+	if (!lttng_chan_buf)
+		goto lttng_chan_buf_error;
+	lttng_chan_common = &lttng_chan_buf->parent;
+	lttng_chan_buf_priv = kzalloc(sizeof(struct lttng_kernel_channel_buffer_private), GFP_KERNEL);
+	if (!lttng_chan_buf_priv)
+		goto lttng_chan_buf_priv_error;
+	lttng_chan_common->type = LTTNG_KERNEL_CHANNEL_TYPE_BUFFER;
+	lttng_chan_buf->priv = lttng_chan_buf_priv;
+	lttng_chan_common->priv = &lttng_chan_buf_priv->parent;
+	lttng_chan_buf_priv->pub = lttng_chan_buf;
+	lttng_chan_buf_priv->parent.pub = lttng_chan_common;
+
+	return lttng_chan_buf;
+
+lttng_chan_buf_priv_error:
+	kfree(lttng_chan_buf);
+lttng_chan_buf_error:
+	return NULL;
+}
+
+struct lttng_kernel_channel_counter *lttng_kernel_alloc_channel_counter(void)
+{
+	struct lttng_kernel_channel_counter *lttng_chan_counter;
+	struct lttng_kernel_channel_common *lttng_chan_common;
+	struct lttng_kernel_channel_counter_private *lttng_chan_counter_priv;
+
+	lttng_chan_counter = kzalloc(sizeof(struct lttng_kernel_channel_counter), GFP_KERNEL);
+	if (!lttng_chan_counter)
+		goto lttng_chan_counter_error;
+	lttng_chan_common = &lttng_chan_counter->parent;
+	lttng_chan_counter_priv = kzalloc(sizeof(struct lttng_kernel_channel_counter_private), GFP_KERNEL);
+	if (!lttng_chan_counter_priv)
+		goto lttng_chan_counter_priv_error;
+	lttng_chan_common->type = LTTNG_KERNEL_CHANNEL_TYPE_COUNTER;
+	lttng_chan_counter->priv = lttng_chan_counter_priv;
+	lttng_chan_common->priv = &lttng_chan_counter_priv->parent;
+	lttng_chan_counter_priv->pub = lttng_chan_counter;
+	lttng_chan_counter_priv->parent.pub = lttng_chan_common;
+
+	return lttng_chan_counter;
+
+lttng_chan_counter_priv_error:
+	kfree(lttng_chan_counter);
+lttng_chan_counter_error:
+	return NULL;
+}
+
+void lttng_kernel_free_channel_common(struct lttng_kernel_channel_common *chan)
+{
+	switch (chan->type) {
+	case LTTNG_KERNEL_CHANNEL_TYPE_BUFFER:
+	{
+		struct lttng_kernel_channel_buffer *chan_buf =
+			container_of(chan, struct lttng_kernel_channel_buffer, parent);
+		kfree(chan_buf->priv);
+		kfree(chan_buf);
+		break;
+	}
+	case LTTNG_KERNEL_CHANNEL_TYPE_COUNTER:
+	{
+		struct lttng_kernel_channel_counter *chan_counter =
+			container_of(chan, struct lttng_kernel_channel_counter, parent);
+		kfree(chan_counter->priv);
+		kfree(chan_counter);
+		break;
+	}
+	default:
+		abort();
+	}
+}
+
 struct lttng_kernel_channel_buffer *lttng_channel_create(struct lttng_kernel_session *session,
 				       const char *transport_name,
 				       void *buf_addr,
@@ -769,15 +847,9 @@ struct lttng_kernel_channel_buffer *lttng_channel_create(struct lttng_kernel_ses
 		printk(KERN_WARNING "LTTng: Can't lock transport module.\n");
 		goto notransport;
 	}
-	chan = kzalloc(sizeof(struct lttng_kernel_channel_buffer), GFP_KERNEL);
+	chan = lttng_kernel_alloc_channel_buffer();
 	if (!chan)
 		goto nomem;
-	chan_priv = kzalloc(sizeof(struct lttng_kernel_channel_buffer_private), GFP_KERNEL);
-	if (!chan_priv)
-		goto nomem_priv;
-	chan->priv = chan_priv;
-	chan_priv->pub = chan;
-	chan->parent.type = LTTNG_KERNEL_CHANNEL_TYPE_BUFFER;
 	chan->parent.session = session;
 	chan->priv->id = session->priv->free_chan_id++;
 	chan->ops = &transport->ops;
@@ -800,9 +872,7 @@ struct lttng_kernel_channel_buffer *lttng_channel_create(struct lttng_kernel_ses
 	return chan;
 
 create_error:
-	kfree(chan_priv);
-nomem_priv:
-	kfree(chan);
+	lttng_kernel_free_channel_common(&chan->parent);
 nomem:
 	if (transport)
 		module_put(transport->owner);
@@ -824,8 +894,7 @@ void _lttng_channel_destroy(struct lttng_kernel_channel_buffer *chan)
 	module_put(chan->priv->transport->owner);
 	list_del(&chan->priv->node);
 	lttng_kernel_destroy_context(chan->priv->ctx);
-	kfree(chan->priv);
-	kfree(chan);
+	lttng_kernel_free_channel_common(&chan->parent);
 }
 
 void lttng_metadata_channel_destroy(struct lttng_kernel_channel_buffer *chan)

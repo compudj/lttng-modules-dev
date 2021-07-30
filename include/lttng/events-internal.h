@@ -21,6 +21,46 @@ enum lttng_enabler_format_type {
 	LTTNG_ENABLER_FORMAT_NAME,
 };
 
+enum lttng_key_token_type {
+	LTTNG_KEY_TOKEN_STRING = 0,
+	LTTNG_KEY_TOKEN_EVENT_NAME = 1,
+	LTTNG_KEY_TOKEN_PROVIDER_NAME = 2,
+};
+
+#define LTTNG_KEY_TOKEN_STRING_LEN_MAX LTTNG_KERNEL_ABI_KEY_TOKEN_STRING_LEN_MAX
+struct lttng_key_token {
+	enum lttng_key_token_type type;
+	union {
+		char string[LTTNG_KEY_TOKEN_STRING_LEN_MAX];
+	} arg;
+};
+
+#define LTTNG_NR_KEY_TOKEN LTTNG_KERNEL_ABI_NR_KEY_TOKEN
+struct lttng_counter_key_dimension {
+	size_t nr_key_tokens;
+	struct lttng_key_token key_tokens[LTTNG_NR_KEY_TOKEN];
+};
+
+#define LTTNG_COUNTER_DIMENSION_MAX LTTNG_KERNEL_ABI_COUNTER_DIMENSION_MAX
+struct lttng_counter_key {
+	size_t nr_dimensions;
+	struct lttng_counter_key_dimension key_dimensions[LTTNG_COUNTER_DIMENSION_MAX];
+};
+
+struct lttng_counter_dimension {
+	uint64_t size;
+	uint64_t underflow_index;
+	uint64_t overflow_index;
+	uint8_t has_underflow;
+	uint8_t has_overflow;
+};
+
+enum lttng_event_enabler_type {
+	LTTNG_EVENT_ENABLER_TYPE_RECORDER,
+	LTTNG_EVENT_ENABLER_TYPE_NOTIFIER,
+	LTTNG_EVENT_ENABLER_TYPE_COUNTER,
+};
+
 enum channel_type {
 	PER_CPU_CHANNEL,
 	METADATA_CHANNEL,
@@ -205,7 +245,9 @@ struct lttng_kernel_bytecode_runtime {
  * Enabler field, within whatever object is enabling an event. Target of
  * backward reference.
  */
-struct lttng_enabler {
+struct lttng_event_enabler_common {
+	enum lttng_event_enabler_type enabler_type;
+
 	enum lttng_enabler_format_type format_type;
 
 	/* head list of struct lttng_kernel_bytecode_node */
@@ -217,14 +259,25 @@ struct lttng_enabler {
 	uint64_t user_token;		/* User-provided token. */
 };
 
-struct lttng_event_enabler {
-	struct lttng_enabler base;
+struct lttng_event_enabler_session_common {
+	struct lttng_event_enabler_common parent;
+	struct lttng_kernel_channel_common *chan;
 	struct list_head node;	/* per-session list of enablers */
+};
+
+struct lttng_event_recorder_enabler {
+	struct lttng_event_enabler_session_common parent;
 	struct lttng_kernel_channel_buffer *chan;
 };
 
+struct lttng_event_counter_enabler {
+	struct lttng_event_enabler_session_common parent;
+	struct lttng_kernel_channel_counter *chan;
+	struct lttng_counter_key key;
+};
+
 struct lttng_event_notifier_enabler {
-	struct lttng_enabler base;
+	struct lttng_event_enabler_common parent;
 	uint64_t error_counter_index;
 	struct list_head node;	/* List of event_notifier enablers */
 	struct lttng_event_notifier_group *group;
@@ -1174,6 +1227,10 @@ void lttng_logger_exit(void);
 extern int lttng_statedump_start(struct lttng_kernel_session *session);
 
 int lttng_calibrate(struct lttng_kernel_abi_calibrate *calibrate);
+
+struct lttng_kernel_channel_buffer *lttng_kernel_alloc_channel_buffer(void);
+struct lttng_kernel_channel_counter *lttng_kernel_alloc_channel_counter(void);
+void lttng_kernel_free_channel_common(struct lttng_kernel_channel_common *chan);
 
 extern const struct file_operations lttng_tracepoint_list_fops;
 extern const struct file_operations lttng_syscall_list_fops;
