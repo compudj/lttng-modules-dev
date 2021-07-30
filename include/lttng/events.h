@@ -335,6 +335,7 @@ struct lttng_kernel_event_common_private;
 enum lttng_kernel_event_type {
 	LTTNG_KERNEL_EVENT_TYPE_RECORDER = 0,
 	LTTNG_KERNEL_EVENT_TYPE_NOTIFIER = 1,
+	LTTNG_KERNEL_EVENT_TYPE_COUNTER = 2,
 };
 
 struct lttng_kernel_event_common {
@@ -358,6 +359,18 @@ struct lttng_kernel_event_recorder {
 	struct lttng_kernel_event_recorder_private *priv;	/* Private event record interface */
 
 	struct lttng_kernel_channel_buffer *chan;
+};
+
+
+struct lttng_kernel_event_counter_private;
+
+struct lttng_kernel_event_counter {
+	uint32_t struct_size;				/* Size of this structure. */
+
+	struct lttng_kernel_event_common parent;
+	struct lttng_kernel_event_counter_private *priv;	/* Private event counter interface */
+
+	struct lttng_kernel_channel_counter *chan;
 };
 
 struct lttng_kernel_notification_ctx {
@@ -401,6 +414,7 @@ struct lttng_kernel_channel_buffer_ops {
 
 enum lttng_kernel_channel_type {
 	LTTNG_KERNEL_CHANNEL_TYPE_BUFFER = 0,
+	LTTNG_KERNEL_CHANNEL_TYPE_COUNTER = 1,
 };
 
 struct lttng_kernel_channel_common_private;
@@ -422,6 +436,22 @@ struct lttng_kernel_channel_buffer {
 	struct lttng_kernel_channel_buffer_private *priv;
 
 	struct lttng_kernel_channel_buffer_ops *ops;
+};
+
+struct lttng_kernel_channel_counter;
+struct lttng_kernel_channel_counter_ops_private;
+
+struct lttng_kernel_channel_counter_ops {
+	struct lttng_kernel_channel_counter_ops_private *priv;	/* Private channel counter ops interface */
+
+	int (*event_counter_add)(struct lttng_kernel_event_counter *event_counter, int64_t v);
+};
+
+struct lttng_kernel_channel_counter {
+	struct lttng_kernel_channel_common parent;
+	struct lttng_kernel_channel_counter_private *priv;	/* Private channel counter interface */
+
+	struct lttng_kernel_channel_counter_ops *ops;
 };
 
 #define LTTNG_DYNAMIC_LEN_STACK_SIZE	128
@@ -469,5 +499,31 @@ int lttng_kernel_probe_register(struct lttng_kernel_probe_desc *desc);
 void lttng_kernel_probe_unregister(struct lttng_kernel_probe_desc *desc);
 
 bool lttng_id_tracker_lookup(struct lttng_kernel_id_tracker_rcu *p, int id);
+
+static inline
+struct lttng_kernel_channel_common *lttng_kernel_get_chan_common_from_event_common(
+		struct lttng_kernel_event_common *event)
+{
+	switch (event->type) {
+	case LTTNG_KERNEL_EVENT_TYPE_RECORDER:
+	{
+		struct lttng_kernel_event_recorder *event_recorder =
+			container_of(event, struct lttng_kernel_event_recorder, parent);
+		struct lttng_kernel_channel_buffer *chan_buf = event_recorder->chan;
+
+		return &chan_buf->parent;
+	}
+	case LTTNG_KERNEL_EVENT_TYPE_COUNTER:
+	{
+		struct lttng_kernel_event_counter *event_counter =
+			container_of(event, struct lttng_kernel_event_counter, parent);
+		struct lttng_kernel_channel_counter *chan_counter = event_counter->chan;
+
+		return &chan_counter->parent;
+	}
+	default:
+		return NULL;
+	}
+}
 
 #endif /* _LTTNG_EVENTS_H */
