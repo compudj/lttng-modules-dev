@@ -345,9 +345,9 @@ void metadata_cache_destroy(struct kref *kref)
 void lttng_session_destroy(struct lttng_kernel_session *session)
 {
 	struct lttng_kernel_channel_buffer_private *chan_priv, *tmpchan_priv;
-	struct lttng_kernel_event_recorder_private *event_recorder_priv, *tmpevent_recorder_priv;
+	struct lttng_kernel_event_session_common_private *event_priv, *tmpevent_priv;
 	struct lttng_metadata_stream *metadata_stream;
-	struct lttng_event_enabler *event_enabler, *tmp_event_enabler;
+	struct lttng_event_enabler_session_common *event_enabler, *tmp_event_enabler;
 	int ret;
 
 	mutex_lock(&sessions_mutex);
@@ -356,8 +356,8 @@ void lttng_session_destroy(struct lttng_kernel_session *session)
 		ret = lttng_syscalls_unregister_channel(chan_priv->pub);
 		WARN_ON(ret);
 	}
-	list_for_each_entry(event_recorder_priv, &session->priv->events, node) {
-		ret = _lttng_event_unregister(event_recorder_priv->pub);
+	list_for_each_entry(event_priv, &session->priv->events, node) {
+		ret = _lttng_event_unregister(event_priv->pub);
 		WARN_ON(ret);
 	}
 	synchronize_trace();	/* Wait for in-flight events to complete */
@@ -368,8 +368,8 @@ void lttng_session_destroy(struct lttng_kernel_session *session)
 	list_for_each_entry_safe(event_enabler, tmp_event_enabler,
 			&session->priv->enablers_head, node)
 		lttng_event_enabler_destroy(event_enabler);
-	list_for_each_entry_safe(event_recorder_priv, tmpevent_recorder_priv, &session->priv->events, node)
-		_lttng_event_destroy(&event_recorder_priv->pub->parent);
+	list_for_each_entry_safe(event_priv, tmpevent_priv, &session->priv->events, node)
+		_lttng_event_destroy(&event_priv->pub->parent);
 	list_for_each_entry_safe(chan_priv, tmpchan_priv, &session->priv->chan, node) {
 		BUG_ON(chan_priv->channel_type == METADATA_CHANNEL);
 		_lttng_channel_destroy(chan_priv->pub);
