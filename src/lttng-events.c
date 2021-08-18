@@ -65,13 +65,12 @@ static struct kmem_cache *event_notifier_private_cache;
 
 static void lttng_session_lazy_sync_event_enablers(struct lttng_kernel_session *session);
 static void lttng_session_sync_event_enablers(struct lttng_kernel_session *session);
-static void lttng_event_enabler_destroy(struct lttng_event_enabler *event_enabler);
-static void lttng_event_notifier_enabler_destroy(struct lttng_event_notifier_enabler *event_notifier_enabler);
+static void lttng_event_enabler_destroy(struct lttng_event_enabler_common *event_enabler);
 static void lttng_event_notifier_group_sync_enablers(struct lttng_event_notifier_group *event_notifier_group);
 
 static void _lttng_event_destroy(struct lttng_kernel_event_common *event);
 static void _lttng_channel_destroy(struct lttng_kernel_channel_buffer *chan);
-static int _lttng_event_unregister(struct lttng_kernel_event_recorder *event);
+static int _lttng_event_unregister(struct lttng_kernel_event_common *event);
 static int _lttng_event_notifier_unregister(struct lttng_kernel_event_notifier *event_notifier);
 static
 int _lttng_event_metadata_statedump(struct lttng_kernel_session *session,
@@ -357,7 +356,7 @@ void lttng_session_destroy(struct lttng_kernel_session *session)
 		WARN_ON(ret);
 	}
 	list_for_each_entry(event_priv, &session->priv->events, node) {
-		ret = _lttng_event_unregister(event_priv->pub);
+		ret = _lttng_event_unregister(event_priv->parent.pub);
 		WARN_ON(ret);
 	}
 	synchronize_trace();	/* Wait for in-flight events to complete */
@@ -367,9 +366,9 @@ void lttng_session_destroy(struct lttng_kernel_session *session)
 	}
 	list_for_each_entry_safe(event_enabler, tmp_event_enabler,
 			&session->priv->enablers_head, node)
-		lttng_event_enabler_destroy(event_enabler);
+		lttng_event_enabler_destroy(&event_enabler->parent);
 	list_for_each_entry_safe(event_priv, tmpevent_priv, &session->priv->events, node)
-		_lttng_event_destroy(&event_priv->pub->parent);
+		_lttng_event_destroy(event_priv->parent.pub);
 	list_for_each_entry_safe(chan_priv, tmpchan_priv, &session->priv->chan, node) {
 		BUG_ON(chan_priv->channel_type == METADATA_CHANNEL);
 		_lttng_channel_destroy(chan_priv->pub);
@@ -421,16 +420,16 @@ void lttng_event_notifier_group_destroy(
 
 	list_for_each_entry_safe(event_notifier_enabler, tmp_event_notifier_enabler,
 			&event_notifier_group->enablers_head, node)
-		lttng_event_notifier_enabler_destroy(event_notifier_enabler);
+		lttng_event_enabler_destroy(&event_notifier_enabler->parent);
 
 	list_for_each_entry_safe(event_notifier_priv, tmpevent_notifier_priv,
 			&event_notifier_group->event_notifiers_head, node)
 		_lttng_event_destroy(&event_notifier_priv->pub->parent);
 
 	if (event_notifier_group->error_counter) {
-		struct lttng_counter *error_counter = event_notifier_group->error_counter;
+		struct lttng_kernel_channel_counter *error_counter = event_notifier_group->error_counter;
 
-		error_counter->ops->counter_destroy(error_counter->counter);
+		error_counter->ops->priv->counter_destroy(error_counter);
 		module_put(error_counter->transport->owner);
 		lttng_kvfree(error_counter);
 		event_notifier_group->error_counter = NULL;
@@ -1503,9 +1502,9 @@ void register_event(struct lttng_kernel_event_recorder *event_recorder)
 /*
  * Only used internally at session destruction.
  */
-int _lttng_event_unregister(struct lttng_kernel_event_recorder *event_recorder)
+int _lttng_event_unregister(struct lttng_kernel_event_common *event)
 {
-	struct lttng_kernel_event_common_private *event_priv = &event_recorder->priv->parent;
+	struct lttng_kernel_event_common_private *event_priv = event->priv;
 	const struct lttng_kernel_event_desc *desc;
 	int ret = -EINVAL;
 
@@ -1517,21 +1516,21 @@ int _lttng_event_unregister(struct lttng_kernel_event_recorder *event_recorder)
 	case LTTNG_KERNEL_ABI_TRACEPOINT:
 		ret = lttng_wrapper_tracepoint_probe_unregister(event_priv->desc->event_kname,
 						  event_priv->desc->tp_class->probe_callback,
-						  event_recorder);
+						  event);
 		break;
 
 	case LTTNG_KERNEL_ABI_KPROBE:
-		lttng_kprobes_unregister_event(event_recorder);
+		lttng_kprobes_unregister_event(event);
 		ret = 0;
 		break;
 
 	case LTTNG_KERNEL_ABI_KRETPROBE:
-		lttng_kretprobes_unregister(event_recorder);
+		lttng_kretprobes_unregister(event);
 		ret = 0;
 		break;
 
 	case LTTNG_KERNEL_ABI_SYSCALL:
-		ret = lttng_syscall_filter_disable_event(event_recorder->chan, event_recorder);
+		ret = lttng_syscall_filter_disable_event(event_recorder->chan, event);
 		break;
 
 	case LTTNG_KERNEL_ABI_NOOP:
@@ -1539,7 +1538,7 @@ int _lttng_event_unregister(struct lttng_kernel_event_recorder *event_recorder)
 		break;
 
 	case LTTNG_KERNEL_ABI_UPROBE:
-		lttng_uprobes_unregister_event(event_recorder);
+		lttng_uprobes_unregister_event(event);
 		ret = 0;
 		break;
 
@@ -1567,7 +1566,7 @@ void register_event_notifier(struct lttng_kernel_event_notifier *event_notifier)
 	case LTTNG_KERNEL_ABI_TRACEPOINT:
 		ret = lttng_wrapper_tracepoint_probe_register(desc->event_kname,
 						  desc->tp_class->probe_callback,
-						  event_notifier);
+						  &event_notifier->parent);
 		break;
 
 	case LTTNG_KERNEL_ABI_SYSCALL:
@@ -1604,7 +1603,7 @@ int _lttng_event_notifier_unregister(
 	case LTTNG_KERNEL_ABI_TRACEPOINT:
 		ret = lttng_wrapper_tracepoint_probe_unregister(event_notifier->priv->parent.desc->event_kname,
 						  event_notifier->priv->parent.desc->tp_class->probe_callback,
-						  event_notifier);
+						  &event_notifier->parent);
 		break;
 
 	case LTTNG_KERNEL_ABI_KPROBE:
@@ -2600,24 +2599,60 @@ int lttng_event_add_callsite(struct lttng_kernel_event_common *event,
 }
 
 static
-void lttng_enabler_destroy(struct lttng_enabler *enabler)
+void lttng_event_enabler_destroy(struct lttng_event_enabler_common *event_enabler)
 {
 	struct lttng_kernel_bytecode_node *filter_node, *tmp_filter_node;
+	struct lttng_kernel_excluder_node *excluder_node, *tmp_excluder_node;
+
+	if (!event_enabler) {
+		return;
+	}
 
 	/* Destroy filter bytecode */
-	list_for_each_entry_safe(filter_node, tmp_filter_node,
-			&enabler->filter_bytecode_head, node) {
+	cds_list_for_each_entry_safe(filter_node, tmp_filter_node,
+			&event_enabler->filter_bytecode_head, node) {
 		lttng_kvfree(filter_node);
 	}
-}
 
-static
-void lttng_event_enabler_destroy(struct lttng_event_enabler *event_enabler)
-{
-	lttng_enabler_destroy(lttng_event_enabler_as_enabler(event_enabler));
+	switch (event_enabler->enabler_type) {
+	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:	/* Fall-through */
+	case LTTNG_EVENT_ENABLER_TYPE_COUNTER:
+	{
+		struct lttng_event_enabler_session_common *enabler_session =
+			caa_container_of(event_enabler, struct lttng_event_enabler_session_common, parent);
 
-	list_del(&event_enabler->node);
-	kfree(event_enabler);
+		list_del(&enabler_session->node);
+		break;
+	}
+	case LTTNG_EVENT_ENABLER_TYPE_NOTIFIER:
+		break;
+	}
+
+	switch (event_enabler->enabler_type) {
+	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
+	{
+		struct lttng_event_recorder_enabler *recorder_enabler =
+			caa_container_of(event_enabler, struct lttng_event_recorder_enabler, parent.parent);
+		kfree(recorder_enabler);
+		break;
+	}
+	case LTTNG_EVENT_ENABLER_TYPE_NOTIFIER:
+	{
+		struct lttng_event_notifier_enabler *notifier_enabler =
+			caa_container_of(event_enabler, struct lttng_event_notifier_enabler, parent);
+
+		cds_list_del(&notifier_enabler->node);
+		kfree(notifier_enabler);
+		break;
+	}
+	case LTTNG_EVENT_ENABLER_TYPE_COUNTER:
+	{
+		struct lttng_event_counter_enabler *counter_enabler =
+			caa_container_of(event_enabler, struct lttng_event_counter_enabler, parent.parent);
+		kfree(counter_enabler);
+		break;
+	}
+	}
 }
 
 struct lttng_event_notifier_enabler *lttng_event_notifier_enabler_create(
@@ -2733,20 +2768,6 @@ error_free:
 	lttng_kvfree(bytecode_node);
 end:
 	return ret;
-}
-
-static
-void lttng_event_notifier_enabler_destroy(
-		struct lttng_event_notifier_enabler *event_notifier_enabler)
-{
-	if (!event_notifier_enabler) {
-		return;
-	}
-
-	list_del(&event_notifier_enabler->node);
-
-	lttng_enabler_destroy(lttng_event_notifier_enabler_as_enabler(event_notifier_enabler));
-	kfree(event_notifier_enabler);
 }
 
 /*

@@ -511,7 +511,7 @@ struct lttng_event_notifier_group {
 
 	unsigned int sys_enter_registered:1, sys_exit_registered:1;
 
-	struct lttng_counter *error_counter;
+	struct lttng_kernel_channel_counter *error_counter;
 	size_t error_counter_len;
 };
 
@@ -1142,13 +1142,13 @@ struct lttng_kernel_channel_counter *lttng_kernel_counter_create(
 		const struct lttng_counter_dimension *dimensions,
 		int64_t global_sum_step,
 		bool coalesce_hits);
-int lttng_kernel_counter_read(struct lttng_counter *counter,
+int lttng_kernel_counter_read(struct lttng_kernel_channel_counter *counter,
 		const size_t *dimension_indexes, int32_t cpu,
 		int64_t *val, bool *overflow, bool *underflow);
-int lttng_kernel_counter_aggregate(struct lttng_counter *counter,
+int lttng_kernel_counter_aggregate(struct lttng_kernel_channel_counter *counter,
 		const size_t *dimension_indexes, int64_t *val,
 		bool *overflow, bool *underflow);
-int lttng_kernel_counter_clear(struct lttng_counter *counter,
+int lttng_kernel_counter_clear(struct lttng_kernel_channel_counter *counter,
 		const size_t *dimension_indexes);
 struct lttng_event_notifier_group *lttng_event_notifier_group_create(void);
 int lttng_event_notifier_group_create_error_counter(
