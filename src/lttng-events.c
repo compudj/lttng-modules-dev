@@ -268,6 +268,17 @@ notransport:
 	return NULL;
 }
 
+static
+void lttng_kernel_counter_destroy(struct lttng_kernel_channel_counter *counter)
+{
+	struct lttng_counter_transport *counter_transport =
+		container_of(counter->ops, struct lttng_counter_transport, ops);
+
+	counter->ops->priv->counter_destroy(counter);
+	module_put(counter_transport->owner);
+	lttng_kvfree(counter);
+}
+
 struct lttng_event_notifier_group *lttng_event_notifier_group_create(void)
 {
 	struct lttng_transport *transport = NULL;
@@ -427,11 +438,7 @@ void lttng_event_notifier_group_destroy(
 		_lttng_event_destroy(&event_notifier_priv->pub->parent);
 
 	if (event_notifier_group->error_counter) {
-		struct lttng_kernel_channel_counter *error_counter = event_notifier_group->error_counter;
-
-		error_counter->ops->priv->counter_destroy(error_counter);
-		module_put(error_counter->transport->owner);
-		lttng_kvfree(error_counter);
+		lttng_kernel_counter_destroy(event_notifier_group->error_counter);
 		event_notifier_group->error_counter = NULL;
 	}
 
