@@ -2163,11 +2163,12 @@ long lttng_abi_event_notifier_group_create_error_counter(
 {
 	int counter_fd, ret;
 	char *counter_transport_name;
-	size_t counter_len;
 	struct lttng_counter *counter = NULL;
 	struct file *counter_file;
 	struct lttng_event_notifier_group *event_notifier_group =
 			(struct lttng_event_notifier_group *) event_notifier_group_file->private_data;
+	struct lttng_counter_dimension dimensions[1];
+	size_t counter_len;
 
 	if (error_counter_conf->arithmetic != LTTNG_KERNEL_ABI_COUNTER_ARITHMETIC_MODULAR) {
 		printk(KERN_ERR "LTTng: event_notifier: Error counter of the wrong arithmetic type.\n");
@@ -2224,8 +2225,14 @@ long lttng_abi_event_notifier_group_create_error_counter(
 		goto refcount_error;
 	}
 
-	counter = lttng_kernel_counter_create(counter_transport_name,
-			1, &counter_len);
+	counter_len = error_counter_conf->dimensions[0].size;
+	dimensions[0].size = counter_len;
+	dimensions[0].underflow_index = 0;
+	dimensions[0].overflow_index = 0;
+	dimensions[0].has_underflow = 0;
+	dimensions[0].has_overflow = 0;
+
+	counter = lttng_kernel_counter_create(counter_transport_name, 1, dimensions);
 	if (!counter) {
 		ret = -EINVAL;
 		goto counter_error;

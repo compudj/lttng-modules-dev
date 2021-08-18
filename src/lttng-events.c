@@ -233,12 +233,15 @@ struct lttng_counter_transport *lttng_counter_transport_find(const char *name)
 	return NULL;
 }
 
-struct lttng_counter *lttng_kernel_counter_create(
+struct lttng_kernel_channel_counter *lttng_kernel_counter_create(
 		const char *counter_transport_name,
-		size_t number_dimensions, const size_t *dimensions_sizes)
+		size_t number_dimensions,
+		const struct lttng_counter_dimension *dimensions,
+		int64_t global_sum_step,
+		bool coalesce_hits)
 {
-	struct lttng_counter *counter = NULL;
 	struct lttng_counter_transport *counter_transport = NULL;
+	struct lttng_kernel_channel_counter *counter = NULL;
 
 	counter_transport = lttng_counter_transport_find(counter_transport_name);
 	if (!counter_transport) {
@@ -250,26 +253,16 @@ struct lttng_counter *lttng_kernel_counter_create(
 		printk(KERN_WARNING "LTTng: Can't lock counter transport module.\n");
 		goto notransport;
 	}
-
-	counter = lttng_kvzalloc(sizeof(struct lttng_counter), GFP_KERNEL);
-	if (!counter)
-		goto nomem;
-
-	/* Create event notifier error counter. */
-	counter->ops = &counter_transport->ops;
-	counter->transport = counter_transport;
-
-	counter->counter = counter->ops->counter_create(
-			number_dimensions, dimensions_sizes, 0);
-	if (!counter->counter) {
+	counter = counter_transport->ops.priv->counter_create(number_dimensions, dimensions,
+			global_sum_step);
+	if (!counter) {
 		goto create_error;
 	}
-
+	counter->ops = &counter_transport->ops;
+	counter->priv->parent.coalesce_hits = coalesce_hits;
 	return counter;
 
 create_error:
-	lttng_kvfree(counter);
-nomem:
 	if (counter_transport)
 		module_put(counter_transport->owner);
 notransport:

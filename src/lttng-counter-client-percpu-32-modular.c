@@ -55,7 +55,7 @@ error:
 static void counter_destroy(struct lttng_kernel_channel_counter *counter)
 {
 	lttng_counter_destroy(counter->priv->counter);
-	lttng_kernel_free_channel_common(&lttng_chan_counter->parent);
+	lttng_kernel_free_channel_common(&counter->parent);
 }
 
 static int counter_add(struct lttng_kernel_channel_counter *counter, const size_t *dimension_indexes, int64_t v)
