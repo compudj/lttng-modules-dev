@@ -27,7 +27,7 @@ static struct lttng_kernel_channel_counter *counter_create(size_t nr_dimensions,
 					  int64_t global_sum_step)
 {
 	size_t max_nr_elem[LTTNG_COUNTER_DIMENSION_MAX], i;
-	struct lttng_ust_channel_counter *lttng_chan_counter;
+	struct lttng_kernel_channel_counter *lttng_chan_counter;
 	struct lib_counter *counter;
 
 	if (nr_dimensions > LTTNG_COUNTER_DIMENSION_MAX)
