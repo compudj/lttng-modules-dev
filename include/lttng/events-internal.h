@@ -631,17 +631,10 @@ int lttng_kernel_interpret_event_filter(const struct lttng_kernel_event_common *
 		void *event_filter_ctx);
 
 static inline
-struct lttng_enabler *lttng_event_enabler_as_enabler(
-		struct lttng_event_enabler *event_enabler)
-{
-	return &event_enabler->base;
-}
-
-static inline
-struct lttng_enabler *lttng_event_notifier_enabler_as_enabler(
+struct lttng_event_enabler_common *lttng_event_notifier_enabler_as_enabler(
 		struct lttng_event_notifier_enabler *event_notifier_enabler)
 {
-	return &event_notifier_enabler->base;
+	return &event_notifier_enabler->parent;
 }
 
 int lttng_context_init(void);
