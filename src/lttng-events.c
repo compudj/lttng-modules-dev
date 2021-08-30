@@ -110,6 +110,50 @@ void synchronize_trace(void)
 #endif /* (LTTNG_LINUX_VERSION_CODE >= LTTNG_KERNEL_VERSION(3,4,0)) */
 }
 
+void lttng_kernel_format_event_name(struct lttng_kernel_abi_event *event_param,
+		const struct lttng_kernel_event_desc *event_desc,
+		enum lttng_kernel_abi_instrumentation itype,
+		char *event_name)
+{
+	switch (itype) {
+	case LTTNG_KERNEL_TRACEPOINT:
+		if (strlen(event_desc->name) >= LTTNG_KERNEL_SYM_NAME_LEN) {
+			ret = -EINVAL;
+			goto type_error;
+		}
+		strcpy(event_name, event_desc->name);
+		break;
+	case LTTNG_KERNEL_KPROBE:
+	case LTTNG_KERNEL_UPROBE:
+	case LTTNG_KERNEL_SYSCALL:
+		if (strlen(event_param->name) >= LTTNG_KERNEL_SYM_NAME_LEN) {
+			ret = -EINVAL;
+			goto type_error;
+		}
+		strcpy(event_name, event_param->name);
+		break;
+	case LTTNG_KERNEL_KRETPROBE:
+		if (strlen(event_param->name) >= LTTNG_KERNEL_SYM_NAME_LEN) {
+			ret = -EINVAL;
+			goto type_error;
+		}
+		strcpy(event_name, event_param->name);
+		if (strlen(event_name) + strlen("_entry") >= LTTNG_KERNEL_SYM_NAME_LEN) {
+			ret = -EINVAL;
+			goto type_error;
+		}
+		strcat(event_name, "_entry");
+		break;
+	case LTTNG_KERNEL_FUNCTION:	/* Fall-through. */
+	case LTTNG_KERNEL_NOOP:		/* Fall-through. */
+	default:
+		WARN_ON_ONCE(1);
+		ret = -EINVAL;
+		goto type_error;
+	}
+	return 0;
+}
+
 void lttng_lock_sessions(void)
 {
 	mutex_lock(&sessions_mutex);
@@ -919,50 +963,58 @@ void _lttng_metadata_channel_hangup(struct lttng_metadata_stream *stream)
  * Supports event creation while tracing session is active.
  * Needs to be called with sessions mutex held.
  */
-struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct lttng_kernel_channel_buffer *chan,
+struct lttng_kernel_event_session_common *_lttng_kernel_event_session_create(enum lttng_kernel_event_type event_type,
+				struct lttng_kernel_channel_common *chan_common,
 				struct lttng_kernel_abi_event *event_param,
+				const struct lttng_counter_key *key,
 				const struct lttng_kernel_event_desc *event_desc,
-				enum lttng_kernel_abi_instrumentation itype)
+				enum lttng_kernel_abi_instrumentation itype,
+				uint64_t token)
 {
-	struct lttng_kernel_session *session = chan->parent.session;
-	struct lttng_kernel_event_recorder *event_recorder;
-	struct lttng_kernel_event_recorder_private *event_recorder_priv;
-	const char *event_name;
-	struct hlist_head *head;
+	struct lttng_kernel_session *session = chan_common->session;
+	struct lttng_kernel_event_session_common_private *event_session_priv_iter;
+	char event_name[LTTNG_KERNEL_ABI_SYM_NAME_LEN];
+	char key_string[LTTNG_KEY_TOKEN_STRING_LEN_MAX];
+	struct hlist_head *name_head;
 	int ret;
 
-	if (chan->priv->free_event_id == -1U) {
-		ret = -EMFILE;
-		goto full;
+	if (lttng_kernel_format_event_name(event_param, event_desc, itype, event_name)) {
+		ret = -EINVAL;
+		goto type_error;
 	}
-
-	switch (itype) {
-	case LTTNG_KERNEL_ABI_TRACEPOINT:
-		event_name = event_desc->event_name;
-		break;
-
-	case LTTNG_KERNEL_ABI_KPROBE:		/* Fall-through */
-	case LTTNG_KERNEL_ABI_UPROBE:		/* Fall-through */
-	case LTTNG_KERNEL_ABI_KRETPROBE:	/* Fall-through */
-	case LTTNG_KERNEL_ABI_SYSCALL:
-		event_name = event_param->name;
-		break;
-
-	case LTTNG_KERNEL_ABI_FUNCTION:		/* Fall-through */
-	case LTTNG_KERNEL_ABI_NOOP:		/* Fall-through */
-	default:
-		WARN_ON_ONCE(1);
+	if (format_event_key(key_string, key, event_name)) {
 		ret = -EINVAL;
 		goto type_error;
 	}
 
-	head = utils_borrow_hash_table_bucket(session->priv->events_ht.table,
-		LTTNG_EVENT_HT_SIZE, event_name);
-	lttng_hlist_for_each_entry(event_recorder_priv, head, hlist) {
-		WARN_ON_ONCE(!event_recorder_priv->parent.desc);
-		if (!strncmp(event_recorder_priv->parent.desc->event_name, event_name,
-					LTTNG_KERNEL_ABI_SYM_NAME_LEN - 1)
-				&& chan == event_recorder_priv->pub->chan) {
+	name_head = borrow_hash_table_bucket(session->priv->events_name_ht.table,
+		LTTNG_UST_EVENT_HT_SIZE, event_name);
+	cds_hlist_for_each_entry_2(event_session_priv_iter, name_head, name_hlist) {
+		bool same_event = false, same_channel = false, same_token = false, same_key = false;
+
+		WARN_ON_ONCE(!event_session_priv_iter->parent.desc);
+		if (event_session_priv_iter->parent.desc == desc)
+			same_event = true;
+		if (chan_common == event_session_priv_iter->chan) {
+			same_channel = true;
+			if (match_event_session_token(event_session_priv_iter->pub, token))
+				same_token = true;
+		}
+		switch (event_session_priv_iter->parent.pub->type) {
+		case LTTNG_KERNEL_EVENT_TYPE_COUNTER:
+		{
+			struct lttng_kernel_event_counter_private *event_counter_priv;
+
+			event_counter_priv = container_of(event_session_priv_iter,
+					struct lttng_kernel_event_counter_private, parent);
+			if (key_string[0] == '\0' || !strcmp(key_string, event_counter_priv_iter->key))
+				same_key = true;
+			break;
+		}
+		default:
+			same_key = true;
+		}
+		if (same_event && same_channel && same_token && same_key) {
 			ret = -EEXIST;
 			goto exist;
 		}
@@ -1173,8 +1225,8 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 	if (ret) {
 		goto statedump_error;
 	}
-	hlist_add_head(&event_recorder->priv->hlist, head);
-	list_add(&event_recorder->priv->node, &chan->parent.session->priv->events);
+	hlist_add_head(&event_recorder->priv->parentt.name_hlist, name_head);
+	list_add(&event_recorder->priv->parent.node, &chan->parent.session->priv->events);
 	return event_recorder;
 
 statedump_error:

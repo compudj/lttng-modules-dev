@@ -169,7 +169,6 @@ struct lttng_kernel_event_notifier_private {
 	struct list_head node;				/* Event notifier list */
 	struct hlist_node hlist;			/* Hash table of event notifiers */
 	struct list_head capture_bytecode_runtime_head;
-
 };
 
 struct lttng_kernel_channel_common_private {
