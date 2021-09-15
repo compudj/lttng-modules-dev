@@ -102,7 +102,7 @@ static const struct lttng_kernel_tracepoint_class tp_class = {
 /*
  * Create event description
  */
-int lttng_init_kprobe_event(const char *name, struct lttng_kernel_event_common *event)
+int lttng_init_kprobes_event(const char *name, struct lttng_kernel_event_common *event)
 {
 	struct lttng_kernel_event_desc *desc;
 	int ret;

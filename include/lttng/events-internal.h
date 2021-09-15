@@ -971,7 +971,7 @@ int lttng_kprobes_register_event(const char *symbol_name,
 		struct lttng_kernel_event_common *event);
 void lttng_kprobes_unregister_event(struct lttng_kernel_event_common *event);
 void lttng_kprobes_destroy_event_private(struct lttng_kernel_event_common *event);
-int lttng_init_kprobe_event(const char *name, struct lttng_kernel_event_common *event);
+int lttng_init_kprobes_event(const char *name, struct lttng_kernel_event_common *event);
 #else
 static inline
 int lttng_kprobes_register_event(const char *symbol_name,
@@ -992,7 +992,7 @@ void lttng_kprobes_destroy_event_private(struct lttng_kernel_event_common *event
 {
 }
 static inline
-int lttng_init_kprobe_event(const char *name, struct lttng_kernel_event_common *event)
+int lttng_init_kprobes_event(const char *name, struct lttng_kernel_event_common *event)
 {
 	return -ENOSYS;
 }
@@ -1007,7 +1007,7 @@ int lttng_uprobes_event_add_callsite(struct lttng_kernel_event_common *event,
 	struct lttng_kernel_abi_event_callsite __user *callsite);
 void lttng_uprobes_unregister_event(struct lttng_kernel_event_common *event);
 void lttng_uprobes_destroy_event_private(struct lttng_kernel_event_common *event);
-int lttng_init_uprobe_event(const char *name, struct lttng_kernel_event_common *event);
+int lttng_init_uprobes_event(const char *name, struct lttng_kernel_event_common *event);
 #else
 static inline
 int lttng_uprobes_register_event(int fd, struct lttng_kernel_event_common *event)
@@ -1032,7 +1032,7 @@ void lttng_uprobes_destroy_event_private(struct lttng_kernel_event_common *event
 {
 }
 static inline
-int lttng_init_uprobe_event(const char *name, struct lttng_kernel_event_common *event)
+int lttng_init_uprobes_event(const char *name, struct lttng_kernel_event_common *event)
 {
 	return -ENOSYS;
 }
