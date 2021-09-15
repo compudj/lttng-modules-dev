@@ -986,6 +986,7 @@ bool match_event_session_token(struct lttng_kernel_event_session_common_private 
 static
 int lttng_kernel_session_event_lookup(struct lttng_kernel_session *session,
 		const char *event_name,
+		const char *key_string,
 		uint64_t token,
 		const struct lttng_kernel_event_desc *event_desc,
 		struct lttng_kernel_channel_common *chan_common,
@@ -1014,7 +1015,7 @@ int lttng_kernel_session_event_lookup(struct lttng_kernel_session *session,
 
 			event_counter_priv = container_of(event_session_priv_iter,
 					struct lttng_kernel_event_counter_private, parent);
-			if (key_string[0] == '\0' || !strcmp(key_string, event_counter_priv_iter->key))
+			if (key_string[0] == '\0' || !strcmp(key_string, event_counter_priv->key))
 				same_key = true;
 			break;
 		}
@@ -1034,12 +1035,15 @@ static
 int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		const char *event_name,
 		struct lttng_kernel_abi_event *event_param,
+		const struct lttng_kernel_event_desc *event_desc,
 		uint64_t token,
 		struct lttng_kernel_event_common *event)
 {
+	int ret;
+
 	event->run_filter = lttng_kernel_interpret_event_filter;
 	event->priv->instrumentation = itype;
-	event->token = token;
+	event->priv->user_token = token;
 	INIT_LIST_HEAD(&event->priv->filter_bytecode_runtime_head);
 	INIT_LIST_HEAD(&event->priv->enablers_ref_head);
 
@@ -1140,6 +1144,8 @@ int lttng_kernel_event_register(enum lttng_kernel_abi_instrumentation itype,
 		struct lttng_kernel_event_common *event,
 		struct lttng_kernel_event_common *event_exit)
 {
+	int ret;
+
 	switch (itype) {
 	case LTTNG_KERNEL_ABI_TRACEPOINT:
 		/* Event will be enabled by enabler sync. */
@@ -1357,7 +1363,7 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 		ret = -EINVAL;
 		goto type_error;
 	}
-	if (lttng_kernel_session_event_lookup(session, event_name, token, &name_head)) {
+	if (lttng_kernel_session_event_lookup(session, event_name, key_string, token, &name_head)) {
 		ret = -EEXIST;
 		goto exist;
 	}
@@ -1388,7 +1394,8 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 	for (i = 0; i < ARRAY_SIZE(event_recorder); i++) {
 		if (!event_recorder[i])
 			continue;
-		ret = lttng_kernel_event_init(itype, event_name, event_param, token,
+		ret = lttng_kernel_event_init(itype, event_name, event_param,
+				event_desc, token,
 				&event_recorder[i]->parent);
 		if (ret) {
 			goto event_init_error;
