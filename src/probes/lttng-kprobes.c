@@ -102,8 +102,7 @@ static const struct lttng_kernel_tracepoint_class tp_class = {
 /*
  * Create event description
  */
-static
-int lttng_create_kprobe_event(const char *name, struct lttng_kernel_event_common *event)
+int lttng_init_kprobe_event(const char *name, struct lttng_kernel_event_common *event)
 {
 	struct lttng_kernel_event_desc *desc;
 	int ret;
@@ -178,17 +177,12 @@ name_error:
 	return ret;
 }
 
-int lttng_kprobes_register_event(const char *name,
-			   const char *symbol_name,
+int lttng_kprobes_register_event(const char *symbol_name,
 			   uint64_t offset,
 			   uint64_t addr,
 			   struct lttng_kernel_event_common *event)
 {
 	int ret;
-
-	ret = lttng_create_kprobe_event(name, event);
-	if (ret)
-		goto error;
 
 	ret = _lttng_kprobes_register(symbol_name, offset, addr,
 		&event->priv->u.kprobe, lttng_kprobes_event_handler_pre);

@@ -1103,6 +1103,9 @@ int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		 */
 		event->enabled = 0;
 		event->priv->registered = 1;
+		ret = lttng_init_kprobes_event(event_name, event);
+		if (ret)
+			goto error;
 		break;
 
 	case LTTNG_KERNEL_ABI_KRETPROBE:
@@ -1116,7 +1119,6 @@ int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		ret = lttng_init_kretprobes_event(event_name, event);
 		if (ret)
 			goto error;
-		}
 		break;
 	}
 
@@ -1163,6 +1165,9 @@ int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		 */
 		event->enabled = 0;
 		event->priv->registered = 1;
+		ret = lttng_init_uprobes_event(event_name, event);
+		if (ret)
+			goto error;
 		break;
 
 	case LTTNG_KERNEL_ABI_FUNCTION:		/* Fall-through */
