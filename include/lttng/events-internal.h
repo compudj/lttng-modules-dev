@@ -528,11 +528,11 @@ struct lttng_counter_transport {
 	struct lttng_kernel_channel_counter_ops ops;
 };
 
-#define LTTNG_EVENT_HT_BITS		12
-#define LTTNG_EVENT_HT_SIZE		(1U << LTTNG_EVENT_HT_BITS)
+#define LTTNG_KERNEL_EVENT_HT_BITS		12
+#define LTTNG_KERNEL_EVENT_HT_SIZE		(1U << LTTNG_KERNEL_EVENT_HT_BITS)
 
 struct lttng_event_ht {
-	struct hlist_head table[LTTNG_EVENT_HT_SIZE];
+	struct hlist_head table[LTTNG_KERNEL_EVENT_HT_SIZE];
 };
 
 struct lttng_kernel_session_private {
@@ -551,7 +551,7 @@ struct lttng_kernel_session_private {
 	/* List of event enablers */
 	struct list_head enablers_head;
 	/* Hash table of events */
-	struct lttng_event_ht events_ht;
+	struct lttng_event_ht events_name_ht;
 	char name[LTTNG_KERNEL_ABI_SESSION_NAME_LEN];
 	char creation_time[LTTNG_KERNEL_ABI_SESSION_CREATION_TIME_ISO8601_LEN];
 };

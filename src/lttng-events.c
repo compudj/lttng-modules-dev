@@ -112,48 +112,54 @@ void synchronize_trace(void)
 #endif /* (LTTNG_LINUX_VERSION_CODE >= LTTNG_KERNEL_VERSION(3,4,0)) */
 }
 
-void lttng_kernel_format_event_name(struct lttng_kernel_abi_event *event_param,
+static
+int lttng_kernel_format_event_name(struct lttng_kernel_abi_event *event_param,
 		const struct lttng_kernel_event_desc *event_desc,
 		enum lttng_kernel_abi_instrumentation itype,
 		char *event_name)
 {
+	int ret;
+
 	switch (itype) {
-	case LTTNG_KERNEL_TRACEPOINT:
-		if (strlen(event_desc->name) >= LTTNG_KERNEL_SYM_NAME_LEN) {
+	case LTTNG_KERNEL_ABI_TRACEPOINT:
+		if (strlen(event_desc->event_name) >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
 			ret = -EINVAL;
 			goto type_error;
 		}
-		strcpy(event_name, event_desc->name);
+		strcpy(event_name, event_desc->event_name);
 		break;
-	case LTTNG_KERNEL_KPROBE:
-	case LTTNG_KERNEL_UPROBE:
-	case LTTNG_KERNEL_SYSCALL:
-		if (strlen(event_param->name) >= LTTNG_KERNEL_SYM_NAME_LEN) {
+	case LTTNG_KERNEL_ABI_KPROBE:
+	case LTTNG_KERNEL_ABI_UPROBE:
+	case LTTNG_KERNEL_ABI_SYSCALL:
+		if (strlen(event_param->name) >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
 			ret = -EINVAL;
 			goto type_error;
 		}
 		strcpy(event_name, event_param->name);
 		break;
-	case LTTNG_KERNEL_KRETPROBE:
-		if (strlen(event_param->name) >= LTTNG_KERNEL_SYM_NAME_LEN) {
+	case LTTNG_KERNEL_ABI_KRETPROBE:
+		if (strlen(event_param->name) >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
 			ret = -EINVAL;
 			goto type_error;
 		}
 		strcpy(event_name, event_param->name);
-		if (strlen(event_name) + strlen("_entry") >= LTTNG_KERNEL_SYM_NAME_LEN) {
+		if (strlen(event_name) + strlen("_entry") >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
 			ret = -EINVAL;
 			goto type_error;
 		}
 		strcat(event_name, "_entry");
 		break;
-	case LTTNG_KERNEL_FUNCTION:	/* Fall-through. */
-	case LTTNG_KERNEL_NOOP:		/* Fall-through. */
+	case LTTNG_KERNEL_ABI_FUNCTION:	/* Fall-through. */
+	case LTTNG_KERNEL_ABI_NOOP:	/* Fall-through. */
 	default:
 		WARN_ON_ONCE(1);
 		ret = -EINVAL;
 		goto type_error;
 	}
 	return 0;
+
+type_error:
+	return ret;
 }
 
 void lttng_lock_sessions(void)
@@ -227,8 +233,8 @@ struct lttng_kernel_session *lttng_session_create(void)
 	memcpy(&metadata_cache->uuid, &session_priv->uuid,
 		sizeof(metadata_cache->uuid));
 	INIT_LIST_HEAD(&session_priv->enablers_head);
-	for (i = 0; i < LTTNG_EVENT_HT_SIZE; i++)
-		INIT_HLIST_HEAD(&session_priv->events_ht.table[i]);
+	for (i = 0; i < LTTNG_KERNEL_EVENT_HT_SIZE; i++)
+		INIT_HLIST_HEAD(&session_priv->events_name_ht.table[i]);
 	list_add(&session_priv->list, &sessions);
 
 	if (lttng_id_tracker_init(&session->pid_tracker, session, TRACKER_PID))
@@ -587,7 +593,7 @@ int lttng_session_metadata_regenerate(struct lttng_kernel_session *session)
 {
 	int ret = 0;
 	struct lttng_kernel_channel_buffer_private *chan_priv;
-	struct lttng_kernel_event_recorder_private *event_recorder_priv;
+	struct lttng_kernel_event_session_common_private *event_session_common_priv;
 	struct lttng_metadata_cache *cache = session->priv->metadata_cache;
 	struct lttng_metadata_stream *stream;
 
@@ -612,7 +618,14 @@ int lttng_session_metadata_regenerate(struct lttng_kernel_session *session)
 		chan_priv->metadata_dumped = 0;
 	}
 
-	list_for_each_entry(event_recorder_priv, &session->priv->events, node) {
+	list_for_each_entry(event_session_common_priv, &session->priv->events, node) {
+		struct lttng_kernel_event_recorder_private *event_recorder_priv;
+
+		if (event_session_common_priv->parent.pub->type != LTTNG_KERNEL_EVENT_TYPE_RECORDER)
+			continue;
+		event_recorder_priv = container_of(event_session_common_priv,
+					struct lttng_kernel_event_recorder_private,
+					parent);
 		event_recorder_priv->metadata_dumped = 0;
 	}
 
@@ -863,7 +876,7 @@ void lttng_kernel_free_channel_common(struct lttng_kernel_channel_common *chan)
 		break;
 	}
 	default:
-		abort();
+		WARN_ON_ONCE(1);
 	}
 }
 
@@ -876,7 +889,6 @@ struct lttng_kernel_channel_buffer *lttng_channel_create(struct lttng_kernel_ses
 				       enum channel_type channel_type)
 {
 	struct lttng_kernel_channel_buffer *chan;
-	struct lttng_kernel_channel_buffer_private *chan_priv;
 	struct lttng_transport *transport = NULL;
 
 	mutex_lock(&sessions_mutex);
@@ -961,25 +973,38 @@ void _lttng_metadata_channel_hangup(struct lttng_metadata_stream *stream)
 }
 
 static
+bool match_event_session_token(struct lttng_kernel_event_session_common_private *event_session_priv,
+		uint64_t token)
+{
+	if (event_session_priv->chan->priv->coalesce_hits)
+		return true;
+	if (event_session_priv->parent.user_token == token)
+		return true;
+	return false;
+}
+
+static
 int lttng_kernel_session_event_lookup(struct lttng_kernel_session *session,
 		const char *event_name,
+		uint64_t token,
 		const struct lttng_kernel_event_desc *event_desc,
 		struct lttng_kernel_channel_common *chan_common,
 		struct hlist_head **_name_head)	/* output */
 {
+	struct lttng_kernel_event_session_common_private *event_session_priv_iter;
 	struct hlist_head *name_head;
 
-	name_head = borrow_hash_table_bucket(session->priv->events_name_ht.table,
-		LTTNG_UST_EVENT_HT_SIZE, event_name);
-	cds_hlist_for_each_entry_2(event_session_priv_iter, name_head, name_hlist) {
+	name_head = utils_borrow_hash_table_bucket(session->priv->events_name_ht.table,
+		LTTNG_KERNEL_EVENT_HT_SIZE, event_name);
+	lttng_hlist_for_each_entry(event_session_priv_iter, name_head, name_hlist) {
 		bool same_event = false, same_channel = false, same_token = false, same_key = false;
 
 		WARN_ON_ONCE(!event_session_priv_iter->parent.desc);
-		if (event_session_priv_iter->parent.desc == desc)
+		if (event_session_priv_iter->parent.desc == event_desc)
 			same_event = true;
 		if (chan_common == event_session_priv_iter->chan) {
 			same_channel = true;
-			if (match_event_session_token(event_session_priv_iter->pub, token))
+			if (match_event_session_token(event_session_priv_iter, token))
 				same_token = true;
 		}
 		switch (event_session_priv_iter->parent.pub->type) {
@@ -1004,14 +1029,17 @@ int lttng_kernel_session_event_lookup(struct lttng_kernel_session *session,
 	return 0;
 }
 
+
 static
 int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		const char *event_name,
 		struct lttng_kernel_abi_event *event_param,
+		uint64_t token,
 		struct lttng_kernel_event_common *event)
 {
 	event->run_filter = lttng_kernel_interpret_event_filter;
 	event->priv->instrumentation = itype;
+	event->token = token;
 	INIT_LIST_HEAD(&event->priv->filter_bytecode_runtime_head);
 	INIT_LIST_HEAD(&event->priv->enablers_ref_head);
 
@@ -1023,10 +1051,8 @@ int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		event->priv->desc = lttng_event_desc_get(event_name);
 		if (!event->priv->desc) {
 			ret = -ENOENT;
-			goto register_error;
+			goto error;
 		}
-		/* Populate event structure before event registration. */
-		smp_wmb();
 		break;
 
 	case LTTNG_KERNEL_ABI_KPROBE:
@@ -1036,92 +1062,16 @@ int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		 */
 		event->enabled = 0;
 		event->priv->registered = 1;
-		/*
-		 * Populate lttng_event structure before event
-		 * registration.
-		 */
-		smp_wmb();
-		ret = lttng_kprobes_register_event(event_name,
-				event_param->u.kprobe.symbol_name,
-				event_param->u.kprobe.offset,
-				event_param->u.kprobe.addr,
-				event);
-		if (ret) {
-			ret = -EINVAL;
-			goto register_error;
-		}
-		ret = try_module_get(event->priv->desc->owner);
-		WARN_ON_ONCE(!ret);
 		break;
 
 	case LTTNG_KERNEL_ABI_KRETPROBE:
 	{
-		struct lttng_kernel_event_recorder *event_recorder_return;
-		struct lttng_kernel_event_recorder_private *event_recorder_return_priv;
-
-		/* kretprobe defines 2 events */
 		/*
 		 * Needs to be explicitly enabled after creation, since
 		 * we may want to apply filters.
 		 */
-		event_recorder->parent.enabled = 0;
-		event_recorder->priv->parent.registered = 1;
-
-		event_recorder_return = kmem_cache_zalloc(event_recorder_cache, GFP_KERNEL);
-		if (!event_recorder_return) {
-			ret = -ENOMEM;
-			goto register_error;
-		}
-		event_recorder_return_priv = kmem_cache_zalloc(event_recorder_private_cache, GFP_KERNEL);
-		if (!event_recorder_return_priv) {
-			kmem_cache_free(event_recorder_cache, event_recorder_return);
-			ret = -ENOMEM;
-			goto register_error;
-		}
-		event_recorder_return_priv->pub = event_recorder_return;
-		event_recorder_return_priv->parent.pub = &event_recorder_return->parent;
-		event_recorder_return->priv = event_recorder_return_priv;
-		event_recorder_return->parent.priv = &event_recorder_return_priv->parent;
-		event_recorder_return->parent.type = LTTNG_KERNEL_EVENT_TYPE_RECORDER;
-
-		event_recorder_return->parent.run_filter = lttng_kernel_interpret_event_filter;
-		event_recorder_return->chan = chan_buffer;
-		event_recorder_return->priv->id = chan_buffer->priv->free_event_id++;
-		event_recorder_return->priv->parent.instrumentation = itype;
-		event_recorder_return->parent.enabled = 0;
-		event_recorder_return->priv->parent.registered = 1;
-		INIT_LIST_HEAD(&event_recorder_return->priv->parent.filter_bytecode_runtime_head);
-		INIT_LIST_HEAD(&event_recorder_return->priv->parent.enablers_ref_head);
-		/*
-		 * Populate lttng_event structure before kretprobe registration.
-		 */
-		smp_wmb();
-		ret = lttng_kretprobes_register(event_name,
-				event_param->u.kretprobe.symbol_name,
-				event_param->u.kretprobe.offset,
-				event_param->u.kretprobe.addr,
-				event_recorder, event_recorder_return);
-		if (ret) {
-			kmem_cache_free(event_recorder_private_cache, event_recorder_return_priv);
-			kmem_cache_free(event_recorder_cache, event_recorder_return);
-			ret = -EINVAL;
-			goto register_error;
-		}
-		/* Take 2 refs on the module: one per event. */
-		ret = try_module_get(event_recorder->priv->parent.desc->owner);
-		WARN_ON_ONCE(!ret);
-		ret = try_module_get(event_recorder_return->priv->parent.desc->owner);
-		WARN_ON_ONCE(!ret);
-		ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder_return);
-		WARN_ON_ONCE(ret > 0);
-		if (ret) {
-			kmem_cache_free(event_recorder_private_cache, event_recorder_return_priv);
-			kmem_cache_free(event_recorder_cache, event_recorder_return);
-			module_put(event_recorder_return->priv->parent.desc->owner);
-			module_put(event_recorder->priv->parent.desc->owner);
-			goto statedump_error;
-		}
-		list_add(&event_recorder_return->priv->node, &session->priv->events);
+		event->enabled = 0;
+		event->priv->registered = 1;
 		break;
 	}
 
@@ -1130,34 +1080,34 @@ int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		 * Needs to be explicitly enabled after creation, since
 		 * we may want to apply filters.
 		 */
-		event_recorder->parent.enabled = 0;
-		event_recorder->priv->parent.registered = 0;
-		event_recorder->priv->parent.desc = event_desc;
+		event->enabled = 0;
+		event->priv->registered = 0;
+		event->priv->desc = event_desc;
 		switch (event_param->u.syscall.entryexit) {
 		case LTTNG_KERNEL_ABI_SYSCALL_ENTRYEXIT:
 			ret = -EINVAL;
-			goto register_error;
+			goto error;
 		case LTTNG_KERNEL_ABI_SYSCALL_ENTRY:
-			event_recorder->priv->parent.u.syscall.entryexit = LTTNG_SYSCALL_ENTRY;
+			event->priv->u.syscall.entryexit = LTTNG_SYSCALL_ENTRY;
 			break;
 		case LTTNG_KERNEL_ABI_SYSCALL_EXIT:
-			event_recorder->priv->parent.u.syscall.entryexit = LTTNG_SYSCALL_EXIT;
+			event->priv->u.syscall.entryexit = LTTNG_SYSCALL_EXIT;
 			break;
 		}
 		switch (event_param->u.syscall.abi) {
 		case LTTNG_KERNEL_ABI_SYSCALL_ABI_ALL:
 			ret = -EINVAL;
-			goto register_error;
+			goto error;
 		case LTTNG_KERNEL_ABI_SYSCALL_ABI_NATIVE:
-			event_recorder->priv->parent.u.syscall.abi = LTTNG_SYSCALL_ABI_NATIVE;
+			event->priv->u.syscall.abi = LTTNG_SYSCALL_ABI_NATIVE;
 			break;
 		case LTTNG_KERNEL_ABI_SYSCALL_ABI_COMPAT:
-			event_recorder->priv->parent.u.syscall.abi = LTTNG_SYSCALL_ABI_COMPAT;
+			event->priv->u.syscall.abi = LTTNG_SYSCALL_ABI_COMPAT;
 			break;
 		}
-		if (!event_recorder->priv->parent.desc) {
+		if (!event->priv->desc) {
 			ret = -EINVAL;
-			goto register_error;
+			goto error;
 		}
 		break;
 
@@ -1166,21 +1116,78 @@ int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		 * Needs to be explicitly enabled after creation, since
 		 * we may want to apply filters.
 		 */
-		event_recorder->parent.enabled = 0;
-		event_recorder->priv->parent.registered = 1;
+		event->enabled = 0;
+		event->priv->registered = 1;
+		break;
 
-		/*
-		 * Populate lttng_event structure before event
-		 * registration.
-		 */
-		smp_wmb();
+	case LTTNG_KERNEL_ABI_FUNCTION:		/* Fall-through */
+	case LTTNG_KERNEL_ABI_NOOP:		/* Fall-through */
+	default:
+		WARN_ON_ONCE(1);
+		ret = -EINVAL;
+		goto error;
+	}
+	return 0;
 
+error:
+	return ret;
+}
+
+static
+int lttng_kernel_event_register(enum lttng_kernel_abi_instrumentation itype,
+		const char *event_name,
+		struct lttng_kernel_abi_event *event_param,
+		struct lttng_kernel_event_common *event,
+		struct lttng_kernel_event_common *event_exit)
+{
+	switch (itype) {
+	case LTTNG_KERNEL_ABI_TRACEPOINT:
+		/* Event will be enabled by enabler sync. */
+		break;
+	case LTTNG_KERNEL_ABI_KPROBE:
+		ret = lttng_kprobes_register_event(event_name,
+				event_param->u.kprobe.symbol_name,
+				event_param->u.kprobe.offset,
+				event_param->u.kprobe.addr,
+				event);
+		if (ret) {
+			ret = -EINVAL;
+			goto error;
+		}
+		ret = try_module_get(event->priv->desc->owner);
+		WARN_ON_ONCE(!ret);
+		break;
+
+	case LTTNG_KERNEL_ABI_KRETPROBE:
+	{
+		ret = lttng_kretprobes_register(event_name,
+				event_param->u.kretprobe.symbol_name,
+				event_param->u.kretprobe.offset,
+				event_param->u.kretprobe.addr,
+				event, event_exit);
+		if (ret) {
+			ret = -EINVAL;
+			goto error;
+		}
+		/* Take 2 refs on the module: one per event. */
+		ret = try_module_get(event->priv->desc->owner);
+		WARN_ON_ONCE(!ret);
+		ret = try_module_get(event_exit->priv->desc->owner);
+		WARN_ON_ONCE(!ret);
+		break;
+	}
+
+	case LTTNG_KERNEL_ABI_SYSCALL:
+		/* Event will be enabled by enabler sync. */
+		break;
+
+	case LTTNG_KERNEL_ABI_UPROBE:
 		ret = lttng_uprobes_register_event(event_param->name,
 				event_param->u.uprobe.fd,
-				event_recorder);
+				event);
 		if (ret)
-			goto register_error;
-		ret = try_module_get(event_recorder->priv->parent.desc->owner);
+			goto error;
+		ret = try_module_get(event->priv->desc->owner);
 		WARN_ON_ONCE(!ret);
 		break;
 
@@ -1189,7 +1196,133 @@ int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 	default:
 		WARN_ON_ONCE(1);
 		ret = -EINVAL;
-		goto register_error;
+		goto error;
+	}
+	return 0;
+
+error:
+	return ret;
+}
+
+static
+struct lttng_kernel_event_recorder *lttng_kernel_event_recorder_alloc(void)
+{
+	struct lttng_kernel_event_recorder *event_recorder;
+	struct lttng_kernel_event_recorder_private *event_recorder_priv;
+
+	event_recorder = kmem_cache_zalloc(event_recorder_cache, GFP_KERNEL);
+	if (!event_recorder) {
+		ret = -ENOMEM;
+		goto cache_error;
+	}
+	event_recorder_priv = kmem_cache_zalloc(event_recorder_private_cache, GFP_KERNEL);
+	if (!event_recorder_priv) {
+		ret = -ENOMEM;
+		goto cache_private_error;
+	}
+	event_recorder_priv->pub = event_recorder;
+	event_recorder_priv->parent.pub = &event_recorder->parent;
+	event_recorder->priv = event_recorder_priv;
+	event_recorder->parent.priv = &event_recorder_priv->parent;
+	event_recorder->parent.type = LTTNG_KERNEL_EVENT_TYPE_RECORDER;
+	return event_recorder;
+
+cache_private_error:
+	kmem_cache_free(event_recorder_cache, event_recorder);
+cache_error:
+	return NULL;
+}
+
+static
+struct lttng_kernel_event_counter *lttng_kernel_event_counter_alloc(void)
+{
+	struct lttng_kernel_event_counter *event_counter;
+	struct lttng_kernel_event_counter_private *event_counter_priv;
+
+	event_counter = kmem_cache_zalloc(event_counter_cache, GFP_KERNEL);
+	if (!event_counter) {
+		ret = -ENOMEM;
+		goto cache_error;
+	}
+	event_counter_priv = kmem_cache_zalloc(event_counter_private_cache, GFP_KERNEL);
+	if (!event_counter_priv) {
+		ret = -ENOMEM;
+		goto cache_private_error;
+	}
+	event_counter_priv->pub = event_counter;
+	event_counter_priv->parent.pub = &event_counter->parent;
+	event_counter->priv = event_counter_priv;
+	event_counter->parent.priv = &event_counter_priv->parent;
+	event_counter->parent.type = LTTNG_KERNEL_EVENT_TYPE_COUNTER;
+	return event_counter;
+
+cache_private_error:
+	kmem_cache_free(event_counter_cache, event_counter);
+cache_error:
+	return NULL;
+}
+
+static
+struct lttng_kernel_event_notifier *lttng_kernel_event_notifier_alloc(void)
+{
+	struct lttng_kernel_event_notifier *event_notifier;
+	struct lttng_kernel_event_notifier_private *event_notifier_priv;
+
+	event_notifier = kmem_cache_zalloc(event_notifier_cache, GFP_KERNEL);
+	if (!event_notifier) {
+		ret = -ENOMEM;
+		goto cache_error;
+	}
+	event_notifier_priv = kmem_cache_zalloc(event_notifier_private_cache, GFP_KERNEL);
+	if (!event_notifier_priv) {
+		ret = -ENOMEM;
+		goto cache_private_error;
+	}
+	event_notifier_priv->pub = event_notifier;
+	event_notifier_priv->parent.pub = &event_notifier->parent;
+	event_notifier->priv = event_notifier_priv;
+	event_notifier->parent.priv = &event_notifier_priv->parent;
+	event_notifier->parent.type = LTTNG_KERNEL_EVENT_TYPE_NOTIFIER;
+	return event_notifier;
+
+cache_private_error:
+	kmem_cache_free(event_notifier_cache, event_notifier);
+cache_error:
+	return NULL;
+}
+
+static
+void lttng_kernel_event_free(struct lttng_kernel_event_common *event)
+{
+	if (!event)
+		return;
+	switch (event->type) {
+	case LTTNG_KERNEL_EVENT_TYPE_RECORDER:
+	{
+		struct lttng_kernel_event_recorder *event_recorder =
+			container_of(event, struct lttng_kernel_event_recorder, parent);
+		kmem_cache_free(event_recorder_private_cache, event_recorder->priv);
+		kmem_cache_free(event_recorder_cache, event_recorder);
+		break;
+	}
+	case LTTNG_KERNEL_EVENT_TYPE_COUNTER:
+	{
+		struct lttng_kernel_event_counter *event_counter =
+			container_of(event, struct lttng_kernel_event_counter, parent);
+		kmem_cache_free(event_counter_private_cache, event_counter->priv);
+		kmem_cache_free(event_counter_cache, event_counter);
+		break;
+	}
+	case LTTNG_KERNEL_EVENT_TYPE_NOTIFIER:
+	{
+		struct lttng_kernel_event_notifier *event_notifier =
+			container_of(event, struct lttng_kernel_event_notifier, parent);
+		kmem_cache_free(event_notifier_private_cache, event_notifier->priv);
+		kmem_cache_free(event_notifier_cache, event_notifier);
+		break;
+	}
+	default:
+		WARN_ON_ONCE(1);
 	}
 }
 
@@ -1207,10 +1340,10 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 	struct lttng_kernel_session *session = chan_buffer->parent.session;
 	char key_string[LTTNG_KEY_TOKEN_STRING_LEN_MAX];
 	char event_name[LTTNG_KERNEL_ABI_SYM_NAME_LEN];
+	struct lttng_kernel_event_recorder *event_recorder[2] = { NULL, NULL };
 	struct hlist_head *name_head;
+	size_t i;
 	int ret;
-	struct lttng_kernel_event_recorder *event_recorder;
-	struct lttng_kernel_event_recorder_private *event_recorder_priv;
 
 	if (chan->priv->free_event_id == -1U) {
 		ret = -EMFILE;
@@ -1224,306 +1357,79 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 		ret = -EINVAL;
 		goto type_error;
 	}
-	if (lttng_kernel_session_event_lookup(session, event_name, &name_head)) {
+	if (lttng_kernel_session_event_lookup(session, event_name, token, &name_head)) {
 		ret = -EEXIST;
 		goto exist;
 	}
-	event_recorder = kmem_cache_zalloc(event_recorder_cache, GFP_KERNEL);
-	if (!event_recorder) {
+	event_recorder[0] = lttng_kernel_event_recorder_alloc();
+	if (!event_recorder[0]) {
 		ret = -ENOMEM;
-		goto cache_error;
+		goto alloc_error;
 	}
-	event_recorder_priv = kmem_cache_zalloc(event_recorder_private_cache, GFP_KERNEL);
-	if (!event_recorder_priv) {
-		ret = -ENOMEM;
-		goto cache_private_error;
-	}
-	event_recorder_priv->pub = event_recorder;
-	event_recorder_priv->parent.pub = &event_recorder->parent;
-	event_recorder->priv = event_recorder_priv;
-	event_recorder->parent.priv = &event_recorder_priv->parent;
-	event_recorder->parent.type = LTTNG_KERNEL_EVENT_TYPE_RECORDER;
+	event_recorder[0]->chan = chan_buffer;
+	event_recorder[0]->priv->id = chan_buffer->priv->free_event_id++;
 
-	event_recorder->chan = chan_buffer;
-	event_recorder->priv->id = chan_buffer->priv->free_event_id++;
-
+	/* Some enabler/event match end up generating two events (e.g. entry/exit) */
 	switch (itype) {
-	case LTTNG_KERNEL_ABI_TRACEPOINT:
-	case LTTNG_KERNEL_ABI_KPROBE:
-		break;
-	case LTTNG_KERNEL_ABI_SYSCALL:
-	case LTTNG_KERNEL_ABI_UPROBE:
-		break;
-
-
 	case LTTNG_KERNEL_ABI_KRETPROBE:
 	{
-		struct lttng_kernel_event_recorder *event_recorder_return;
-		struct lttng_kernel_event_recorder_private *event_recorder_return_priv;
-
-		/* kretprobe defines 2 events */
-		event_recorder_return = kmem_cache_zalloc(event_recorder_cache, GFP_KERNEL);
-		if (!event_recorder_return) {
+		event_recorder[1] = lttng_kernel_event_recorder_alloc();
+		if (!event_recorder[1]) {
 			ret = -ENOMEM;
 			goto register_error;
 		}
-		event_recorder_return_priv = kmem_cache_zalloc(event_recorder_private_cache, GFP_KERNEL);
-		if (!event_recorder_return_priv) {
-			kmem_cache_free(event_recorder_cache, event_recorder_return);
-			ret = -ENOMEM;
-			goto register_error;
-		}
-		event_recorder_return_priv->pub = event_recorder_return;
-		event_recorder_return_priv->parent.pub = &event_recorder_return->parent;
-		event_recorder_return->priv = event_recorder_return_priv;
-		event_recorder_return->parent.priv = &event_recorder_return_priv->parent;
-		event_recorder_return->parent.type = LTTNG_KERNEL_EVENT_TYPE_RECORDER;
 
-		event_recorder_return->chan = chan_buffer;
-		event_recorder_return->priv->id = chan_buffer->priv->free_event_id++;
-		ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder_return);
-		WARN_ON_ONCE(ret > 0);
-		list_add(&event_recorder_return->priv->node, &session->priv->events);
+		event_recorder[1]->chan = chan_buffer;
+		event_recorder[1]->priv->id = chan_buffer->priv->free_event_id++;
 		break;
 	}
-
-	case LTTNG_KERNEL_ABI_FUNCTION:		/* Fall-through */
-	case LTTNG_KERNEL_ABI_NOOP:		/* Fall-through */
-	default:
-		WARN_ON_ONCE(1);
-		ret = -EINVAL;
-		goto register_error;
 	}
 
-	ret = lttng_kernel_event_init(itype, &event_recorder->parent, &event_recorder_return->parent);
+	for (i = 0; i < ARRAY_SIZE(event_recorder); i++) {
+		if (!event_recorder[i])
+			continue;
+		ret = lttng_kernel_event_init(itype, event_name, event_param, token,
+				&event_recorder[i]->parent);
+		if (ret) {
+			goto event_init_error;
+		}
+	}
+
+	/* Populate lttng_event structure before event registration. */
+	smp_wmb();
+
+	ret = lttng_kernel_event_register(itype, event_name, event_param,
+			&event_recorder[0]->parent,
+			event_recorder[1] ? &event_recorder[1]->parent : NULL);
 	if (ret) {
-		goto event_init_error;
+		goto event_register_error;
 	}
 
-	///
-
-	event_recorder->parent.run_filter = lttng_kernel_interpret_event_filter;
-	event_recorder->priv->parent.instrumentation = itype;
-	INIT_LIST_HEAD(&event_recorder->priv->parent.filter_bytecode_runtime_head);
-	INIT_LIST_HEAD(&event_recorder->priv->parent.enablers_ref_head);
-
-	switch (itype) {
-	case LTTNG_KERNEL_ABI_TRACEPOINT:
-		/* Event will be enabled by enabler sync. */
-		event_recorder->parent.enabled = 0;
-		event_recorder->priv->parent.registered = 0;
-		event_recorder->priv->parent.desc = lttng_event_desc_get(event_name);
-		if (!event_recorder->priv->parent.desc) {
-			ret = -ENOENT;
-			goto register_error;
-		}
-		/* Populate lttng_event structure before event registration. */
-		smp_wmb();
-		break;
-
-	case LTTNG_KERNEL_ABI_KPROBE:
-		/*
-		 * Needs to be explicitly enabled after creation, since
-		 * we may want to apply filters.
-		 */
-		event_recorder->parent.enabled = 0;
-		event_recorder->priv->parent.registered = 1;
-		/*
-		 * Populate lttng_event structure before event
-		 * registration.
-		 */
-		smp_wmb();
-		ret = lttng_kprobes_register_event(event_name,
-				event_param->u.kprobe.symbol_name,
-				event_param->u.kprobe.offset,
-				event_param->u.kprobe.addr,
-				event_recorder);
-		if (ret) {
-			ret = -EINVAL;
-			goto register_error;
-		}
-		ret = try_module_get(event_recorder->priv->parent.desc->owner);
-		WARN_ON_ONCE(!ret);
-		break;
-
-	case LTTNG_KERNEL_ABI_KRETPROBE:
-	{
-		struct lttng_kernel_event_recorder *event_recorder_return;
-		struct lttng_kernel_event_recorder_private *event_recorder_return_priv;
-
-		/* kretprobe defines 2 events */
-		/*
-		 * Needs to be explicitly enabled after creation, since
-		 * we may want to apply filters.
-		 */
-		event_recorder->parent.enabled = 0;
-		event_recorder->priv->parent.registered = 1;
-
-		event_recorder_return = kmem_cache_zalloc(event_recorder_cache, GFP_KERNEL);
-		if (!event_recorder_return) {
-			ret = -ENOMEM;
-			goto register_error;
-		}
-		event_recorder_return_priv = kmem_cache_zalloc(event_recorder_private_cache, GFP_KERNEL);
-		if (!event_recorder_return_priv) {
-			kmem_cache_free(event_recorder_cache, event_recorder_return);
-			ret = -ENOMEM;
-			goto register_error;
-		}
-		event_recorder_return_priv->pub = event_recorder_return;
-		event_recorder_return_priv->parent.pub = &event_recorder_return->parent;
-		event_recorder_return->priv = event_recorder_return_priv;
-		event_recorder_return->parent.priv = &event_recorder_return_priv->parent;
-		event_recorder_return->parent.type = LTTNG_KERNEL_EVENT_TYPE_RECORDER;
-
-		event_recorder_return->parent.run_filter = lttng_kernel_interpret_event_filter;
-		event_recorder_return->chan = chan_buffer;
-		event_recorder_return->priv->id = chan_buffer->priv->free_event_id++;
-		event_recorder_return->priv->parent.instrumentation = itype;
-		event_recorder_return->parent.enabled = 0;
-		event_recorder_return->priv->parent.registered = 1;
-		INIT_LIST_HEAD(&event_recorder_return->priv->parent.filter_bytecode_runtime_head);
-		INIT_LIST_HEAD(&event_recorder_return->priv->parent.enablers_ref_head);
-		/*
-		 * Populate lttng_event structure before kretprobe registration.
-		 */
-		smp_wmb();
-		ret = lttng_kretprobes_register(event_name,
-				event_param->u.kretprobe.symbol_name,
-				event_param->u.kretprobe.offset,
-				event_param->u.kretprobe.addr,
-				event_recorder, event_recorder_return);
-		if (ret) {
-			kmem_cache_free(event_recorder_private_cache, event_recorder_return_priv);
-			kmem_cache_free(event_recorder_cache, event_recorder_return);
-			ret = -EINVAL;
-			goto register_error;
-		}
-		/* Take 2 refs on the module: one per event. */
-		ret = try_module_get(event_recorder->priv->parent.desc->owner);
-		WARN_ON_ONCE(!ret);
-		ret = try_module_get(event_recorder_return->priv->parent.desc->owner);
-		WARN_ON_ONCE(!ret);
-		ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder_return);
+	for (i = 0; i < ARRAY_SIZE(event_recorder); i++) {
+		if (!event_recorder[i])
+			continue;
+		ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder[i]);
 		WARN_ON_ONCE(ret > 0);
 		if (ret) {
-			kmem_cache_free(event_recorder_private_cache, event_recorder_return_priv);
-			kmem_cache_free(event_recorder_cache, event_recorder_return);
-			module_put(event_recorder_return->priv->parent.desc->owner);
-			module_put(event_recorder->priv->parent.desc->owner);
 			goto statedump_error;
 		}
-		list_add(&event_recorder_return->priv->node, &session->priv->events);
-		break;
 	}
 
-	case LTTNG_KERNEL_ABI_SYSCALL:
-		/*
-		 * Needs to be explicitly enabled after creation, since
-		 * we may want to apply filters.
-		 */
-		event_recorder->parent.enabled = 0;
-		event_recorder->priv->parent.registered = 0;
-		event_recorder->priv->parent.desc = event_desc;
-		switch (event_param->u.syscall.entryexit) {
-		case LTTNG_KERNEL_ABI_SYSCALL_ENTRYEXIT:
-			ret = -EINVAL;
-			goto register_error;
-		case LTTNG_KERNEL_ABI_SYSCALL_ENTRY:
-			event_recorder->priv->parent.u.syscall.entryexit = LTTNG_SYSCALL_ENTRY;
-			break;
-		case LTTNG_KERNEL_ABI_SYSCALL_EXIT:
-			event_recorder->priv->parent.u.syscall.entryexit = LTTNG_SYSCALL_EXIT;
-			break;
-		}
-		switch (event_param->u.syscall.abi) {
-		case LTTNG_KERNEL_ABI_SYSCALL_ABI_ALL:
-			ret = -EINVAL;
-			goto register_error;
-		case LTTNG_KERNEL_ABI_SYSCALL_ABI_NATIVE:
-			event_recorder->priv->parent.u.syscall.abi = LTTNG_SYSCALL_ABI_NATIVE;
-			break;
-		case LTTNG_KERNEL_ABI_SYSCALL_ABI_COMPAT:
-			event_recorder->priv->parent.u.syscall.abi = LTTNG_SYSCALL_ABI_COMPAT;
-			break;
-		}
-		if (!event_recorder->priv->parent.desc) {
-			ret = -EINVAL;
-			goto register_error;
-		}
-		break;
-
-	case LTTNG_KERNEL_ABI_UPROBE:
-		/*
-		 * Needs to be explicitly enabled after creation, since
-		 * we may want to apply filters.
-		 */
-		event_recorder->parent.enabled = 0;
-		event_recorder->priv->parent.registered = 1;
-
-		/*
-		 * Populate lttng_event structure before event
-		 * registration.
-		 */
-		smp_wmb();
-
-		ret = lttng_uprobes_register_event(event_param->name,
-				event_param->u.uprobe.fd,
-				event_recorder);
-		if (ret)
-			goto register_error;
-		ret = try_module_get(event_recorder->priv->parent.desc->owner);
-		WARN_ON_ONCE(!ret);
-		break;
-
-	case LTTNG_KERNEL_ABI_FUNCTION:		/* Fall-through */
-	case LTTNG_KERNEL_ABI_NOOP:		/* Fall-through */
-	default:
-		WARN_ON_ONCE(1);
-		ret = -EINVAL;
-		goto register_error;
-	}
-
-	switch (itype) {
-	case LTTNG_KERNEL_ABI_TRACEPOINT:
-	case LTTNG_KERNEL_ABI_KPROBE:
-		break;
-	case LTTNG_KERNEL_ABI_SYSCALL:
-	case LTTNG_KERNEL_ABI_UPROBE:
-		break;
-
-	case LTTNG_KERNEL_ABI_KRETPROBE:
-	{
-		ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder_return);
-		WARN_ON_ONCE(ret > 0);
-		list_add(&event_recorder_return->priv->node, &session->priv->events);
-		break;
-	}
-
-	case LTTNG_KERNEL_ABI_FUNCTION:		/* Fall-through */
-	case LTTNG_KERNEL_ABI_NOOP:		/* Fall-through */
-	default:
-		WARN_ON_ONCE(1);
-		ret = -EINVAL;
-		goto register_error;
-	}
-
-	ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder);
-	WARN_ON_ONCE(ret > 0);
-	if (ret) {
-		goto statedump_error;
-	}
 	hlist_add_head(&event_recorder->priv->parent.name_hlist, name_head);
-	list_add(&event_recorder->priv->parent.node, &session->priv->events);
+	for (i = 0; i < ARRAY_SIZE(event_recorder); i++) {
+		if (!event_recorder[i])
+			continue;
+		list_add(&event_recorder[i]->priv->parent.node, &session->priv->events);
+	}
 	return event_recorder;
 
 statedump_error:
 	/* If a statedump error occurs, events will not be readable. */
 register_error:
-	kmem_cache_free(event_recorder_private_cache, event_recorder_priv);
-cache_private_error:
-	kmem_cache_free(event_recorder_cache, event_recorder);
-cache_error:
+	for (i = 0; i < ARRAY_SIZE(event_recorder); i++) {
+		lttng_kernel_event_free(&event_recorder[i]->parent);
+	}
+alloc_error:
 exist:
 type_error:
 full:
@@ -2527,7 +2433,7 @@ void lttng_create_tracepoint_event_if_missing(struct lttng_event_enabler *event_
 			 * Check if already created.
 			 */
 			head = utils_borrow_hash_table_bucket(
-				session->priv->events_ht.table, LTTNG_EVENT_HT_SIZE,
+				session->priv->events_name_ht.table, LTTNG_KERNEL_EVENT_HT_SIZE,
 				desc->event_name);
 			lttng_hlist_for_each_entry(event_recorder_private, head, hlist) {
 				if (event_recorder_private->parent.desc == desc
