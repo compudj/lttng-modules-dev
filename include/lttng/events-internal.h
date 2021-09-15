@@ -109,7 +109,7 @@ struct lttng_kernel_event_common_private {
 	const struct lttng_kernel_event_desc *desc;
 	/* Backward references: list of lttng_enabler_ref (ref to enablers) */
 	struct list_head enablers_ref_head;
-	int registered;					/* has reg'd tracepoint probe */
+	int registered;					/* has registered probe */
 	uint64_t user_token;
 
 	int has_enablers_without_filter_bytecode;
@@ -999,19 +999,15 @@ int lttng_event_add_callsite(struct lttng_kernel_event_common *event,
 
 #ifdef CONFIG_UPROBES
 int lttng_uprobes_register_event(const char *name,
-	int fd, struct lttng_kernel_event_recorder *event);
+	int fd, struct lttng_kernel_event_common *event);
 int lttng_uprobes_event_add_callsite(struct lttng_kernel_event_common *event,
 	struct lttng_kernel_abi_event_callsite __user *callsite);
-void lttng_uprobes_unregister_event(struct lttng_kernel_event_recorder *event);
-void lttng_uprobes_destroy_event_private(struct lttng_kernel_event_recorder *event);
-int lttng_uprobes_register_event_notifier(const char *name,
-	int fd, struct lttng_kernel_event_notifier *event_notifier);
-void lttng_uprobes_unregister_event_notifier(struct lttng_kernel_event_notifier *event_notifier);
-void lttng_uprobes_destroy_event_notifier_private(struct lttng_kernel_event_notifier *event_notifier);
+void lttng_uprobes_unregister_event(struct lttng_kernel_event_common *event);
+void lttng_uprobes_destroy_event_private(struct lttng_kernel_event_common *event);
 #else
 static inline
 int lttng_uprobes_register_event(const char *name,
-	int fd, struct lttng_kernel_event_recorder *event)
+	int fd, struct lttng_kernel_event_common *event)
 {
 	return -ENOSYS;
 }
@@ -1024,29 +1020,12 @@ int lttng_uprobes_event_add_callsite(struct lttng_kernel_event_common *event,
 }
 
 static inline
-void lttng_uprobes_unregister_event(struct lttng_kernel_event_recorder *event)
+void lttng_uprobes_unregister_event(struct lttng_kernel_event_common *event)
 {
 }
 
 static inline
-void lttng_uprobes_destroy_event_private(struct lttng_kernel_event_recorder *event)
-{
-}
-
-static inline
-int lttng_uprobes_register_event_notifier(const char *name,
-	int fd, struct lttng_kernel_event_notifier *event_notifier)
-{
-	return -ENOSYS;
-}
-
-static inline
-void lttng_uprobes_unregister_event_notifier(struct lttng_kernel_event_notifier *event_notifier)
-{
-}
-
-static inline
-void lttng_uprobes_destroy_event_notifier_private(struct lttng_kernel_event_notifier *event_notifier)
+void lttng_uprobes_destroy_event_private(struct lttng_kernel_event_common *event)
 {
 }
 #endif
@@ -1056,37 +1035,43 @@ int lttng_kretprobes_register(const char *name,
 		const char *symbol_name,
 		uint64_t offset,
 		uint64_t addr,
-		struct lttng_kernel_event_recorder *event_entry,
-		struct lttng_kernel_event_recorder *event_exit);
-void lttng_kretprobes_unregister(struct lttng_kernel_event_recorder *event);
-void lttng_kretprobes_destroy_private(struct lttng_kernel_event_recorder *event);
+		struct lttng_kernel_event_common *event_entry,
+		struct lttng_kernel_event_common *event_exit);
+void lttng_kretprobes_unregister(struct lttng_kernel_event_common *event);
+void lttng_kretprobes_destroy_private(struct lttng_kernel_event_common *event);
 int lttng_kretprobes_event_enable_state(struct lttng_kernel_event_common *event,
 	int enable);
+int lttng_init_kretprobes_event(const char *name, struct lttng_kernel_event_common *event);
 #else
 static inline
 int lttng_kretprobes_register(const char *name,
 		const char *symbol_name,
 		uint64_t offset,
 		uint64_t addr,
-		struct lttng_kernel_event_recorder *event_entry,
-		struct lttng_kernel_event_recorder *event_exit)
+		struct lttng_kernel_event_common *event_entry,
+		struct lttng_kernel_event_common *event_exit)
 {
 	return -ENOSYS;
 }
 
 static inline
-void lttng_kretprobes_unregister(struct lttng_kernel_event_recorder *event)
+void lttng_kretprobes_unregister(struct lttng_kernel_event_common *event)
 {
 }
 
 static inline
-void lttng_kretprobes_destroy_private(struct lttng_kernel_event_recorder *event)
+void lttng_kretprobes_destroy_private(struct lttng_kernel_event_common *event)
 {
 }
 
 static inline
 int lttng_kretprobes_event_enable_state(struct lttng_kernel_event_common *event,
 	int enable)
+{
+	return -ENOSYS;
+}
+static inline
+int lttng_init_kretprobes_event(const char *name, struct lttng_kernel_event_common *event)
 {
 	return -ENOSYS;
 }
@@ -1147,12 +1132,22 @@ struct lttng_kernel_channel_buffer *lttng_global_channel_create(struct lttng_ker
 void lttng_metadata_channel_destroy(struct lttng_kernel_channel_buffer *chan);
 struct lttng_kernel_event_recorder *lttng_kernel_event_recorder_create(struct lttng_kernel_channel_buffer *chan,
 				struct lttng_kernel_abi_event *event_param,
+				const struct lttng_counter_key *key,
 				const struct lttng_kernel_event_desc *event_desc,
-				enum lttng_kernel_abi_instrumentation itype);
-struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct lttng_kernel_channel_buffer *chan,
+				enum lttng_kernel_abi_instrumentation itype,
+				uint64_t token);
+struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct lttng_kernel_channel_buffer *chan_buffer,
 				struct lttng_kernel_abi_event *event_param,
+				const struct lttng_counter_key *key,
 				const struct lttng_kernel_event_desc *event_desc,
-				enum lttng_kernel_abi_instrumentation itype);
+				enum lttng_kernel_abi_instrumentation itype,
+				uint64_t token);
+
+int lttng_kernel_event_register(enum lttng_kernel_abi_instrumentation itype,
+		struct lttng_kernel_abi_event *event_param,
+		struct lttng_kernel_event_common *event,
+		struct lttng_kernel_event_common *event_exit);
+
 struct lttng_kernel_event_recorder *lttng_event_compat_old_create(struct lttng_kernel_channel_buffer *chan,
 		struct lttng_kernel_abi_old_event *old_event_param,
 		const struct lttng_kernel_event_desc *internal_desc);

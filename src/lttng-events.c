@@ -116,38 +116,37 @@ static
 int lttng_kernel_format_event_name(struct lttng_kernel_abi_event *event_param,
 		const struct lttng_kernel_event_desc *event_desc,
 		enum lttng_kernel_abi_instrumentation itype,
+		const char *suffix,
 		char *event_name)
 {
 	int ret;
 
 	switch (itype) {
 	case LTTNG_KERNEL_ABI_TRACEPOINT:
-		if (strlen(event_desc->event_name) >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
+		if (strlen(event_desc->event_name) + strlen(suffix) >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
 			ret = -EINVAL;
 			goto type_error;
 		}
 		strcpy(event_name, event_desc->event_name);
+		strcat(event_name, suffix);
 		break;
 	case LTTNG_KERNEL_ABI_KPROBE:
 	case LTTNG_KERNEL_ABI_UPROBE:
 	case LTTNG_KERNEL_ABI_SYSCALL:
-		if (strlen(event_param->name) >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
+		if (strlen(event_param->name) + strlen(suffix) >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
 			ret = -EINVAL;
 			goto type_error;
 		}
 		strcpy(event_name, event_param->name);
+		strcat(event_name, suffix);
 		break;
 	case LTTNG_KERNEL_ABI_KRETPROBE:
-		if (strlen(event_param->name) >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
+		if (strlen(event_param->name) + strlen(suffix) >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
 			ret = -EINVAL;
 			goto type_error;
 		}
 		strcpy(event_name, event_param->name);
-		if (strlen(event_name) + strlen("_entry") >= LTTNG_KERNEL_ABI_SYM_NAME_LEN) {
-			ret = -EINVAL;
-			goto type_error;
-		}
-		strcat(event_name, "_entry");
+		strcat(event_name, suffix);
 		break;
 	case LTTNG_KERNEL_ABI_FUNCTION:	/* Fall-through. */
 	case LTTNG_KERNEL_ABI_NOOP:	/* Fall-through. */
@@ -973,6 +972,44 @@ void _lttng_metadata_channel_hangup(struct lttng_metadata_stream *stream)
 }
 
 static
+int format_event_key(char *key_string, const struct lttng_counter_key *key,
+		     const char *event_name)
+{
+	const struct lttng_counter_key_dimension *dim;
+	size_t i, left = LTTNG_KEY_TOKEN_STRING_LEN_MAX;
+
+	key_string[0] = '\0';
+	if (!key || !key->nr_dimensions)
+		return 0;
+	/* Currently event keys can only be specified on a single dimension. */
+	if (key->nr_dimensions != 1)
+		return -EINVAL;
+	dim = &key->key_dimensions[0];
+	for (i = 0; i < dim->nr_key_tokens; i++) {
+		const struct lttng_key_token *token = &dim->key_tokens[i];
+		size_t token_len;
+		const char *str;
+
+		switch (token->type) {
+		case LTTNG_KEY_TOKEN_STRING:
+			str = token->arg.string;
+			break;
+		case LTTNG_KEY_TOKEN_EVENT_NAME:
+			str = event_name;
+			break;
+		default:
+			return -EINVAL;
+		}
+		token_len = strlen(str);
+		if (token_len >= left)
+			return -EINVAL;
+		strcat(key_string, str);
+		left -= token_len;
+	}
+	return 0;
+}
+
+static
 bool match_event_session_token(struct lttng_kernel_event_session_common_private *event_session_priv,
 		uint64_t token)
 {
@@ -1076,6 +1113,10 @@ int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		 */
 		event->enabled = 0;
 		event->priv->registered = 1;
+		ret = lttng_init_kretprobes_event(event_name, event);
+		if (ret)
+			goto error;
+		}
 		break;
 	}
 
@@ -1137,9 +1178,7 @@ error:
 	return ret;
 }
 
-static
 int lttng_kernel_event_register(enum lttng_kernel_abi_instrumentation itype,
-		const char *event_name,
 		struct lttng_kernel_abi_event *event_param,
 		struct lttng_kernel_event_common *event,
 		struct lttng_kernel_event_common *event_exit)
@@ -1149,10 +1188,11 @@ int lttng_kernel_event_register(enum lttng_kernel_abi_instrumentation itype,
 	switch (itype) {
 	case LTTNG_KERNEL_ABI_TRACEPOINT:
 		/* Event will be enabled by enabler sync. */
-		break;
+		ret = -EINVAL;
+		goto error;
+
 	case LTTNG_KERNEL_ABI_KPROBE:
-		ret = lttng_kprobes_register_event(event_name,
-				event_param->u.kprobe.symbol_name,
+		ret = lttng_kprobes_register_event(event_param->u.kprobe.symbol_name,
 				event_param->u.kprobe.offset,
 				event_param->u.kprobe.addr,
 				event);
@@ -1166,8 +1206,7 @@ int lttng_kernel_event_register(enum lttng_kernel_abi_instrumentation itype,
 
 	case LTTNG_KERNEL_ABI_KRETPROBE:
 	{
-		ret = lttng_kretprobes_register(event_name,
-				event_param->u.kretprobe.symbol_name,
+		ret = lttng_kretprobes_register(event_param->u.kretprobe.symbol_name,
 				event_param->u.kretprobe.offset,
 				event_param->u.kretprobe.addr,
 				event, event_exit);
@@ -1185,11 +1224,11 @@ int lttng_kernel_event_register(enum lttng_kernel_abi_instrumentation itype,
 
 	case LTTNG_KERNEL_ABI_SYSCALL:
 		/* Event will be enabled by enabler sync. */
-		break;
+		ret = -EINVAL;
+		goto error;
 
 	case LTTNG_KERNEL_ABI_UPROBE:
-		ret = lttng_uprobes_register_event(event_param->name,
-				event_param->u.uprobe.fd,
+		ret = lttng_uprobes_register_event(event_param->u.uprobe.fd,
 				event);
 		if (ret)
 			goto error;
@@ -1217,19 +1256,15 @@ struct lttng_kernel_event_recorder *lttng_kernel_event_recorder_alloc(void)
 	struct lttng_kernel_event_recorder_private *event_recorder_priv;
 
 	event_recorder = kmem_cache_zalloc(event_recorder_cache, GFP_KERNEL);
-	if (!event_recorder) {
-		ret = -ENOMEM;
+	if (!event_recorder)
 		goto cache_error;
-	}
 	event_recorder_priv = kmem_cache_zalloc(event_recorder_private_cache, GFP_KERNEL);
-	if (!event_recorder_priv) {
-		ret = -ENOMEM;
+	if (!event_recorder_priv)
 		goto cache_private_error;
-	}
 	event_recorder_priv->pub = event_recorder;
-	event_recorder_priv->parent.pub = &event_recorder->parent;
+	event_recorder_priv->parent.parent.pub = &event_recorder->parent;
 	event_recorder->priv = event_recorder_priv;
-	event_recorder->parent.priv = &event_recorder_priv->parent;
+	event_recorder->parent.priv = &event_recorder_priv->parent.parent;
 	event_recorder->parent.type = LTTNG_KERNEL_EVENT_TYPE_RECORDER;
 	return event_recorder;
 
@@ -1246,19 +1281,15 @@ struct lttng_kernel_event_counter *lttng_kernel_event_counter_alloc(void)
 	struct lttng_kernel_event_counter_private *event_counter_priv;
 
 	event_counter = kmem_cache_zalloc(event_counter_cache, GFP_KERNEL);
-	if (!event_counter) {
-		ret = -ENOMEM;
+	if (!event_counter)
 		goto cache_error;
-	}
 	event_counter_priv = kmem_cache_zalloc(event_counter_private_cache, GFP_KERNEL);
-	if (!event_counter_priv) {
-		ret = -ENOMEM;
+	if (!event_counter_priv)
 		goto cache_private_error;
-	}
 	event_counter_priv->pub = event_counter;
-	event_counter_priv->parent.pub = &event_counter->parent;
+	event_counter_priv->parent.parent.pub = &event_counter->parent;
 	event_counter->priv = event_counter_priv;
-	event_counter->parent.priv = &event_counter_priv->parent;
+	event_counter->parent.priv = &event_counter_priv->parent.parent;
 	event_counter->parent.type = LTTNG_KERNEL_EVENT_TYPE_COUNTER;
 	return event_counter;
 
@@ -1275,15 +1306,11 @@ struct lttng_kernel_event_notifier *lttng_kernel_event_notifier_alloc(void)
 	struct lttng_kernel_event_notifier_private *event_notifier_priv;
 
 	event_notifier = kmem_cache_zalloc(event_notifier_cache, GFP_KERNEL);
-	if (!event_notifier) {
-		ret = -ENOMEM;
+	if (!event_notifier)
 		goto cache_error;
-	}
 	event_notifier_priv = kmem_cache_zalloc(event_notifier_private_cache, GFP_KERNEL);
-	if (!event_notifier_priv) {
-		ret = -ENOMEM;
+	if (!event_notifier_priv)
 		goto cache_private_error;
-	}
 	event_notifier_priv->pub = event_notifier;
 	event_notifier_priv->parent.pub = &event_notifier->parent;
 	event_notifier->priv = event_notifier_priv;
@@ -1341,21 +1368,22 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 				const struct lttng_counter_key *key,
 				const struct lttng_kernel_event_desc *event_desc,
 				enum lttng_kernel_abi_instrumentation itype,
-				uint64_t token)
+				uint64_t token,
+				const char *suffix)
 {
 	struct lttng_kernel_session *session = chan_buffer->parent.session;
 	char key_string[LTTNG_KEY_TOKEN_STRING_LEN_MAX];
 	char event_name[LTTNG_KERNEL_ABI_SYM_NAME_LEN];
-	struct lttng_kernel_event_recorder *event_recorder[2] = { NULL, NULL };
+	struct lttng_kernel_event_recorder *event_recorder;
 	struct hlist_head *name_head;
 	size_t i;
 	int ret;
 
-	if (chan->priv->free_event_id == -1U) {
+	if (chan_buffer->priv->free_event_id == -1U) {
 		ret = -EMFILE;
 		goto full;
 	}
-	if (lttng_kernel_format_event_name(event_param, event_desc, itype, event_name)) {
+	if (lttng_kernel_format_event_name(event_param, event_desc, itype, suffix, event_name)) {
 		ret = -EINVAL;
 		goto type_error;
 	}
@@ -1363,79 +1391,42 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 		ret = -EINVAL;
 		goto type_error;
 	}
-	if (lttng_kernel_session_event_lookup(session, event_name, key_string, token, &name_head)) {
+	if (lttng_kernel_session_event_lookup(session, event_name, key_string, token, event_desc,
+				&chan_buffer->parent, &name_head)) {
 		ret = -EEXIST;
 		goto exist;
 	}
-	event_recorder[0] = lttng_kernel_event_recorder_alloc();
-	if (!event_recorder[0]) {
+	event_recorder = lttng_kernel_event_recorder_alloc();
+	if (!event_recorder) {
 		ret = -ENOMEM;
 		goto alloc_error;
 	}
-	event_recorder[0]->chan = chan_buffer;
-	event_recorder[0]->priv->id = chan_buffer->priv->free_event_id++;
+	event_recorder->chan = chan_buffer;
+	event_recorder->priv->id = chan_buffer->priv->free_event_id++;
 
-	/* Some enabler/event match end up generating two events (e.g. entry/exit) */
-	switch (itype) {
-	case LTTNG_KERNEL_ABI_KRETPROBE:
-	{
-		event_recorder[1] = lttng_kernel_event_recorder_alloc();
-		if (!event_recorder[1]) {
-			ret = -ENOMEM;
-			goto register_error;
-		}
-
-		event_recorder[1]->chan = chan_buffer;
-		event_recorder[1]->priv->id = chan_buffer->priv->free_event_id++;
-		break;
-	}
-	}
-
-	for (i = 0; i < ARRAY_SIZE(event_recorder); i++) {
-		if (!event_recorder[i])
-			continue;
-		ret = lttng_kernel_event_init(itype, event_name, event_param,
-				event_desc, token,
-				&event_recorder[i]->parent);
-		if (ret) {
-			goto event_init_error;
-		}
+	ret = lttng_kernel_event_init(itype, event_name, event_param,
+			event_desc, token,
+			&event_recorder[i]->parent);
+	if (ret) {
+		goto event_init_error;
 	}
 
 	/* Populate lttng_event structure before event registration. */
 	smp_wmb();
 
-	ret = lttng_kernel_event_register(itype, event_name, event_param,
-			&event_recorder[0]->parent,
-			event_recorder[1] ? &event_recorder[1]->parent : NULL);
+	ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder[i]);
+	WARN_ON_ONCE(ret > 0);
 	if (ret) {
-		goto event_register_error;
+		goto statedump_error;
 	}
-
-	for (i = 0; i < ARRAY_SIZE(event_recorder); i++) {
-		if (!event_recorder[i])
-			continue;
-		ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder[i]);
-		WARN_ON_ONCE(ret > 0);
-		if (ret) {
-			goto statedump_error;
-		}
-	}
-
 	hlist_add_head(&event_recorder->priv->parent.name_hlist, name_head);
-	for (i = 0; i < ARRAY_SIZE(event_recorder); i++) {
-		if (!event_recorder[i])
-			continue;
-		list_add(&event_recorder[i]->priv->parent.node, &session->priv->events);
-	}
+	list_add(&event_recorder[i]->priv->parent.node, &session->priv->events);
 	return event_recorder;
 
 statedump_error:
 	/* If a statedump error occurs, events will not be readable. */
 register_error:
-	for (i = 0; i < ARRAY_SIZE(event_recorder); i++) {
-		lttng_kernel_event_free(&event_recorder[i]->parent);
-	}
+	lttng_kernel_event_free(&event_recorder->parent);
 alloc_error:
 exist:
 type_error:
@@ -1708,13 +1699,16 @@ int lttng_kernel_counter_clear(struct lttng_counter *counter,
 
 struct lttng_kernel_event_recorder *lttng_kernel_event_recorder_create(struct lttng_kernel_channel_buffer *chan,
 				struct lttng_kernel_abi_event *event_param,
+				const struct lttng_counter_key *key,
 				const struct lttng_kernel_event_desc *event_desc,
-				enum lttng_kernel_abi_instrumentation itype)
+				enum lttng_kernel_abi_instrumentation itype,
+				uint64_t token,
+				const char *suffix)
 {
 	struct lttng_kernel_event_recorder *event;
 
 	mutex_lock(&sessions_mutex);
-	event = _lttng_kernel_event_recorder_create(chan, event_param, event_desc, itype);
+	event = _lttng_kernel_event_recorder_create(chan, event_param, key, event_desc, itype, token, suffix);
 	mutex_unlock(&sessions_mutex);
 	return event;
 }
@@ -2455,7 +2449,7 @@ void lttng_create_tracepoint_event_if_missing(struct lttng_event_enabler *event_
 			 * event probe.
 			 */
 			event_recorder = _lttng_kernel_event_recorder_create(event_enabler->chan,
-					NULL, desc, LTTNG_KERNEL_ABI_TRACEPOINT);
+					NULL, desc, LTTNG_KERNEL_ABI_TRACEPOINT, "");
 			if (!event_recorder) {
 				printk(KERN_INFO "LTTng: Unable to create event %s\n",
 					probe_desc->event_desc[i]->event_name);

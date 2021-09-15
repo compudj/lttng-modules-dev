@@ -1888,7 +1888,6 @@ int lttng_abi_create_event(struct file *channel_file,
 	}
 
 	case LTTNG_KERNEL_ABI_KPROBE:			/* Fall-through */
-	case LTTNG_KERNEL_ABI_KRETPROBE:		/* Fall-through */
 	case LTTNG_KERNEL_ABI_UPROBE:
 	{
 		struct lttng_kernel_event_recorder *event;
@@ -1898,12 +1897,42 @@ int lttng_abi_create_event(struct file *channel_file,
 		 * will stay invariant for the rest of the session.
 		 */
 		event = lttng_kernel_event_recorder_create(channel, event_param,
-				NULL, event_param->instrumentation);
+				NULL, event_param->instrumentation, "");
 		WARN_ON_ONCE(!event);
 		if (IS_ERR(event)) {
 			ret = PTR_ERR(event);
 			goto event_error;
 		}
+		ret = lttng_kernel_event_register(event_param->instrumentation,
+				event_param, &event->parent, NULL);
+		priv = event;
+		break;
+	}
+	case LTTNG_KERNEL_ABI_KRETPROBE:
+	{
+		struct lttng_kernel_event_recorder *event_entry, *event_exit;
+
+		/*
+		 * We tolerate no failure path after event creation. It
+		 * will stay invariant for the rest of the session.
+		 */
+		event_entry = lttng_kernel_event_recorder_create(channel, event_param,
+				NULL, event_param->instrumentation, "_entry");
+		WARN_ON_ONCE(!event);
+		if (IS_ERR(event)) {
+			ret = PTR_ERR(event);
+			goto event_error;
+		}
+		event_exit = lttng_kernel_event_recorder_create(channel, event_param,
+				NULL, event_param->instrumentation, "_exit");
+		WARN_ON_ONCE(!event);
+		if (IS_ERR(event)) {
+			ret = PTR_ERR(event);
+			goto event_error;
+		}
+		ret = lttng_kernel_event_register(event_param->instrumentation,
+				event_param, &event_entry->parent,
+				&event_exit->parent);
 		priv = event;
 		break;
 	}
