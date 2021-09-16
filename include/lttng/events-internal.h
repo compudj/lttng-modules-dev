@@ -1169,14 +1169,16 @@ struct lttng_kernel_event_notifier *lttng_event_notifier_create(
 				uint64_t error_counter_idx,
 				struct lttng_event_notifier_group *event_notifier_group,
 				struct lttng_kernel_abi_event_notifier *event_notifier_param,
-				enum lttng_kernel_abi_instrumentation itype);
+				enum lttng_kernel_abi_instrumentation itype,
+				const char *suffix);
 struct lttng_kernel_event_notifier *_lttng_event_notifier_create(
 				const struct lttng_kernel_event_desc *event_notifier_desc,
 				uint64_t id,
 				uint64_t error_counter_idx,
 				struct lttng_event_notifier_group *event_notifier_group,
 				struct lttng_kernel_abi_event_notifier *event_notifier_param,
-				enum lttng_kernel_abi_instrumentation itype);
+				enum lttng_kernel_abi_instrumentation itype,
+				const char *suffix);
 
 int lttng_channel_enable(struct lttng_kernel_channel_buffer *channel);
 int lttng_channel_disable(struct lttng_kernel_channel_buffer *channel);

@@ -1905,6 +1905,9 @@ int lttng_abi_create_event(struct file *channel_file,
 		}
 		ret = lttng_kernel_event_register(event_param->instrumentation,
 				event_param, &event->parent, NULL);
+		if (ret) {
+			goto event_error;
+		}
 		priv = event;
 		break;
 	}
@@ -1918,14 +1921,14 @@ int lttng_abi_create_event(struct file *channel_file,
 		 */
 		event_entry = lttng_kernel_event_recorder_create(channel, event_param,
 				NULL, event_param->instrumentation, "_entry");
-		WARN_ON_ONCE(!event);
+		WARN_ON_ONCE(IS_ERR(event));
 		if (IS_ERR(event)) {
 			ret = PTR_ERR(event);
 			goto event_error;
 		}
 		event_exit = lttng_kernel_event_recorder_create(channel, event_param,
 				NULL, event_param->instrumentation, "_exit");
-		WARN_ON_ONCE(!event);
+		WARN_ON_ONCE(IS_ERR(event));
 		if (IS_ERR(event)) {
 			ret = PTR_ERR(event);
 			goto event_error;
@@ -1933,7 +1936,10 @@ int lttng_abi_create_event(struct file *channel_file,
 		ret = lttng_kernel_event_register(event_param->instrumentation,
 				event_param, &event_entry->parent,
 				&event_exit->parent);
-		priv = event;
+		if (ret) {
+			goto event_error;
+		}
+		priv = event_entry;
 		break;
 	}
 
@@ -2140,7 +2146,6 @@ int lttng_abi_create_event_notifier(struct file *event_notifier_group_file,
 	}
 
 	case LTTNG_KERNEL_ABI_KPROBE:			/* Fall-through */
-	case LTTNG_KERNEL_ABI_KRETPROBE:		/* Fall-through */
 	case LTTNG_KERNEL_ABI_UPROBE:
 	{
 		struct lttng_kernel_event_notifier *event_notifier;
@@ -2154,16 +2159,22 @@ int lttng_abi_create_event_notifier(struct file *event_notifier_group_file,
 				event_notifier_param->error_counter_index,
 				event_notifier_group,
 				event_notifier_param,
-				event_notifier_param->event.instrumentation);
-		WARN_ON_ONCE(!event_notifier);
+				event_notifier_param->event.instrumentation, "");
+		WARN_ON_ONCE(IS_ERR(event_notifier));
 		if (IS_ERR(event_notifier)) {
 			ret = PTR_ERR(event_notifier);
+			goto event_notifier_error;
+		}
+		ret = lttng_kernel_event_register(event_notifier_param->event.instrumentation,
+				&event_notifier_param->event, &event_notifier->parent, NULL);
+		if (ret) {
 			goto event_notifier_error;
 		}
 		priv = event_notifier;
 		break;
 	}
 
+	case LTTNG_KERNEL_ABI_KRETPROBE:		/* Fall-through */
 	case LTTNG_KERNEL_ABI_FUNCTION:			/* Fall-through */
 	case LTTNG_KERNEL_ABI_NOOP:			/* Fall-through */
 	default:

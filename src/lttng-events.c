@@ -1520,7 +1520,7 @@ event_init_error:
 alloc_error:
 exist:
 type_error:
-	return NULL;
+	return ERR_PTR(ret);
 }
 
 /*
@@ -1593,7 +1593,7 @@ event_init_error:
 alloc_error:
 exist:
 type_error:
-	return NULL;
+	return ERR_PTR(ret);
 }
 
 struct lttng_kernel_event_notifier *_lttng_event_notifier_create(
@@ -1601,38 +1601,24 @@ struct lttng_kernel_event_notifier *_lttng_event_notifier_create(
 		uint64_t token, uint64_t error_counter_index,
 		struct lttng_event_notifier_group *event_notifier_group,
 		struct lttng_kernel_abi_event_notifier *event_notifier_param,
-		enum lttng_kernel_abi_instrumentation itype)
+		enum lttng_kernel_abi_instrumentation itype,
+		const char *suffix)
 {
-	struct lttng_kernel_event_notifier *event_notifier;
 	struct lttng_kernel_event_notifier_private *event_notifier_priv;
-	struct lttng_counter *error_counter;
-	const char *event_name;
-	struct hlist_head *head;
+	struct lttng_kernel_event_notifier *event_notifier;
+	char event_name[LTTNG_KERNEL_ABI_SYM_NAME_LEN];
+	struct lttng_kernel_channel_counter *error_counter;
+	struct hlist_head *name_head;
 	int ret;
 
-	switch (itype) {
-	case LTTNG_KERNEL_ABI_TRACEPOINT:
-		event_name = event_desc->event_name;
-		break;
-
-	case LTTNG_KERNEL_ABI_KPROBE:		/* Fall-through */
-	case LTTNG_KERNEL_ABI_UPROBE:		/* Fall-through */
-	case LTTNG_KERNEL_ABI_SYSCALL:
-		event_name = event_notifier_param->event.name;
-		break;
-
-	case LTTNG_KERNEL_ABI_KRETPROBE:	/* Fall-through */
-	case LTTNG_KERNEL_ABI_FUNCTION:		/* Fall-through */
-	case LTTNG_KERNEL_ABI_NOOP:		/* Fall-through */
-	default:
-		WARN_ON_ONCE(1);
+	if (lttng_kernel_format_event_name(&event_notifier_param->event, event_desc,
+				itype, suffix, event_name)) {
 		ret = -EINVAL;
 		goto type_error;
 	}
-
-	head = utils_borrow_hash_table_bucket(event_notifier_group->event_notifiers_ht.table,
+	name_head = utils_borrow_hash_table_bucket(event_notifier_group->event_notifiers_ht.table,
 		LTTNG_EVENT_NOTIFIER_HT_SIZE, event_name);
-	lttng_hlist_for_each_entry(event_notifier_priv, head, hlist) {
+	lttng_hlist_for_each_entry(event_notifier_priv, name_head, hlist) {
 		WARN_ON_ONCE(!event_notifier_priv->parent.desc);
 		if (!strncmp(event_notifier_priv->parent.desc->event_name, event_name,
 					LTTNG_KERNEL_ABI_SYM_NAME_LEN - 1)
@@ -1642,145 +1628,22 @@ struct lttng_kernel_event_notifier *_lttng_event_notifier_create(
 			goto exist;
 		}
 	}
-
-	event_notifier = kmem_cache_zalloc(event_notifier_cache, GFP_KERNEL);
+	event_notifier = lttng_kernel_event_notifier_alloc();
 	if (!event_notifier) {
 		ret = -ENOMEM;
-		goto cache_error;
+		goto alloc_error;
 	}
-	event_notifier_priv = kmem_cache_zalloc(event_notifier_private_cache, GFP_KERNEL);
-	if (!event_notifier_priv) {
-		ret = -ENOMEM;
-		goto cache_private_error;
+	ret = lttng_kernel_event_init(itype, event_name, &event_notifier_param->event,
+			event_desc, token, false, &event_notifier->parent);
+	if (ret) {
+		goto event_init_error;
 	}
-	event_notifier_priv->pub = event_notifier;
-	event_notifier_priv->parent.pub = &event_notifier->parent;
-	event_notifier->priv = event_notifier_priv;
-	event_notifier->parent.priv = &event_notifier_priv->parent;
-	event_notifier->parent.type = LTTNG_KERNEL_EVENT_TYPE_NOTIFIER;
-
 	event_notifier->priv->group = event_notifier_group;
-	event_notifier->priv->parent.user_token = token;
-	event_notifier->priv->error_counter_index = error_counter_index;
 	event_notifier->priv->num_captures = 0;
-	event_notifier->priv->parent.instrumentation = itype;
-	event_notifier->notification_send = lttng_event_notifier_notification_send;
-	INIT_LIST_HEAD(&event_notifier->priv->parent.filter_bytecode_runtime_head);
-	INIT_LIST_HEAD(&event_notifier->priv->parent.enablers_ref_head);
-	INIT_LIST_HEAD(&event_notifier->priv->capture_bytecode_runtime_head);
-	event_notifier->parent.run_filter = lttng_kernel_interpret_event_filter;
+	event_notifier->priv->error_counter_index = error_counter_index;
 
-	switch (itype) {
-	case LTTNG_KERNEL_ABI_TRACEPOINT:
-		/* Event will be enabled by enabler sync. */
-		event_notifier->parent.enabled = 0;
-		event_notifier->priv->parent.registered = 0;
-		event_notifier->priv->parent.desc = lttng_event_desc_get(event_name);
-		if (!event_notifier->priv->parent.desc) {
-			ret = -ENOENT;
-			goto register_error;
-		}
-		/* Populate lttng_event_notifier structure before event registration. */
-		smp_wmb();
-		break;
-
-	case LTTNG_KERNEL_ABI_KPROBE:
-		/*
-		 * Needs to be explicitly enabled after creation, since
-		 * we may want to apply filters.
-		 */
-		event_notifier->parent.enabled = 0;
-		event_notifier->priv->parent.registered = 1;
-		/*
-		 * Populate lttng_event_notifier structure before event
-		 * registration.
-		 */
-		smp_wmb();
-		ret = lttng_kprobes_register_event_notifier(
-				event_notifier_param->event.u.kprobe.symbol_name,
-				event_notifier_param->event.u.kprobe.offset,
-				event_notifier_param->event.u.kprobe.addr,
-				event_notifier);
-		if (ret) {
-			ret = -EINVAL;
-			goto register_error;
-		}
-		ret = try_module_get(event_notifier->priv->parent.desc->owner);
-		WARN_ON_ONCE(!ret);
-		break;
-
-	case LTTNG_KERNEL_ABI_SYSCALL:
-		/*
-		 * Needs to be explicitly enabled after creation, since
-		 * we may want to apply filters.
-		 */
-		event_notifier->parent.enabled = 0;
-		event_notifier->priv->parent.registered = 0;
-		event_notifier->priv->parent.desc = event_desc;
-		switch (event_notifier_param->event.u.syscall.entryexit) {
-		case LTTNG_KERNEL_ABI_SYSCALL_ENTRYEXIT:
-			ret = -EINVAL;
-			goto register_error;
-		case LTTNG_KERNEL_ABI_SYSCALL_ENTRY:
-			event_notifier->priv->parent.u.syscall.entryexit = LTTNG_SYSCALL_ENTRY;
-			break;
-		case LTTNG_KERNEL_ABI_SYSCALL_EXIT:
-			event_notifier->priv->parent.u.syscall.entryexit = LTTNG_SYSCALL_EXIT;
-			break;
-		}
-		switch (event_notifier_param->event.u.syscall.abi) {
-		case LTTNG_KERNEL_ABI_SYSCALL_ABI_ALL:
-			ret = -EINVAL;
-			goto register_error;
-		case LTTNG_KERNEL_ABI_SYSCALL_ABI_NATIVE:
-			event_notifier->priv->parent.u.syscall.abi = LTTNG_SYSCALL_ABI_NATIVE;
-			break;
-		case LTTNG_KERNEL_ABI_SYSCALL_ABI_COMPAT:
-			event_notifier->priv->parent.u.syscall.abi = LTTNG_SYSCALL_ABI_COMPAT;
-			break;
-		}
-
-		if (!event_notifier->priv->parent.desc) {
-			ret = -EINVAL;
-			goto register_error;
-		}
-		break;
-
-	case LTTNG_KERNEL_ABI_UPROBE:
-		/*
-		 * Needs to be explicitly enabled after creation, since
-		 * we may want to apply filters.
-		 */
-		event_notifier->parent.enabled = 0;
-		event_notifier->priv->parent.registered = 1;
-
-		/*
-		 * Populate lttng_event_notifier structure before
-		 * event_notifier registration.
-		 */
-		smp_wmb();
-
-		ret = lttng_uprobes_register_event_notifier(
-				event_notifier_param->event.name,
-				event_notifier_param->event.u.uprobe.fd,
-				event_notifier);
-		if (ret)
-			goto register_error;
-		ret = try_module_get(event_notifier->priv->parent.desc->owner);
-		WARN_ON_ONCE(!ret);
-		break;
-
-	case LTTNG_KERNEL_ABI_KRETPROBE:	/* Fall-through */
-	case LTTNG_KERNEL_ABI_FUNCTION:		/* Fall-through */
-	case LTTNG_KERNEL_ABI_NOOP:		/* Fall-through */
-	default:
-		WARN_ON_ONCE(1);
-		ret = -EINVAL;
-		goto register_error;
-	}
-
+	hlist_add_head(&event_notifier->priv->hlist, name_head);
 	list_add(&event_notifier->priv->node, &event_notifier_group->event_notifiers_head);
-	hlist_add_head(&event_notifier->priv->hlist, head);
 
 	/*
 	 * Clear the error counter bucket. The sessiond keeps track of which
@@ -1799,50 +1662,52 @@ struct lttng_kernel_event_notifier *_lttng_event_notifier_create(
 			printk(KERN_INFO "LTTng: event_notifier: Error counter index out-of-bound: counter-len=%zu, index=%llu\n",
 				event_notifier_group->error_counter_len, event_notifier->priv->error_counter_index);
 			ret = -EINVAL;
-			goto register_error;
+			goto error_counter_error;
 		}
 
 		dimension_index[0] = event_notifier->priv->error_counter_index;
-		ret = error_counter->ops->counter_clear(error_counter->counter, dimension_index);
+		ret = error_counter->ops->priv->counter_clear(error_counter, dimension_index);
 		if (ret) {
 			printk(KERN_INFO "LTTng: event_notifier: Unable to clear error counter bucket %llu\n",
 				event_notifier->priv->error_counter_index);
-			goto register_error;
+			goto error_counter_error;
 		}
 	}
 
+	/* Populate lttng_kernel_event_notifier structure before event registration. */
+	smp_wmb();
+
 	return event_notifier;
 
-register_error:
-	kmem_cache_free(event_notifier_private_cache, event_notifier_priv);
-cache_private_error:
-	kmem_cache_free(event_notifier_cache, event_notifier);
-cache_error:
+error_counter_error:
+event_init_error:
+	lttng_kernel_event_free(&event_notifier->parent);
+alloc_error:
 exist:
 type_error:
 	return ERR_PTR(ret);
 }
 
-int lttng_kernel_counter_read(struct lttng_counter *counter,
+int lttng_kernel_counter_read(struct lttng_kernel_channel_counter *counter,
 		const size_t *dim_indexes, int32_t cpu,
 		int64_t *val, bool *overflow, bool *underflow)
 {
-	return counter->ops->counter_read(counter->counter, dim_indexes,
+	return counter->ops->priv->counter_read(counter, dim_indexes,
 			cpu, val, overflow, underflow);
 }
 
-int lttng_kernel_counter_aggregate(struct lttng_counter *counter,
+int lttng_kernel_counter_aggregate(struct lttng_kernel_channel_counter *counter,
 		const size_t *dim_indexes, int64_t *val,
 		bool *overflow, bool *underflow)
 {
-	return counter->ops->counter_aggregate(counter->counter, dim_indexes,
+	return counter->ops->priv->counter_aggregate(counter, dim_indexes,
 			val, overflow, underflow);
 }
 
-int lttng_kernel_counter_clear(struct lttng_counter *counter,
+int lttng_kernel_counter_clear(struct lttng_kernel_channel_counter *counter,
 		const size_t *dim_indexes)
 {
-	return counter->ops->counter_clear(counter->counter, dim_indexes);
+	return counter->ops->priv->counter_clear(counter, dim_indexes);
 }
 
 struct lttng_kernel_event_recorder *lttng_kernel_event_recorder_create(struct lttng_kernel_channel_buffer *chan,
@@ -1866,14 +1731,15 @@ struct lttng_kernel_event_notifier *lttng_event_notifier_create(
 		uint64_t id, uint64_t error_counter_index,
 		struct lttng_event_notifier_group *event_notifier_group,
 		struct lttng_kernel_abi_event_notifier *event_notifier_param,
-		enum lttng_kernel_abi_instrumentation itype)
+		enum lttng_kernel_abi_instrumentation itype,
+		const char *suffix)
 {
 	struct lttng_kernel_event_notifier *event_notifier;
 
 	mutex_lock(&sessions_mutex);
 	event_notifier = _lttng_event_notifier_create(event_desc, id,
 		error_counter_index, event_notifier_group,
-		event_notifier_param, itype);
+		event_notifier_param, itype, suffix);
 	mutex_unlock(&sessions_mutex);
 	return event_notifier;
 }
@@ -2598,7 +2464,7 @@ void lttng_create_tracepoint_event_if_missing(struct lttng_event_enabler *event_
 			 */
 			event_recorder = _lttng_kernel_event_recorder_create(event_enabler->chan,
 					NULL, desc, LTTNG_KERNEL_ABI_TRACEPOINT, "");
-			if (!event_recorder) {
+			if (IS_ERR(event_recorder)) {
 				printk(KERN_INFO "LTTng: Unable to create event %s\n",
 					probe_desc->event_desc[i]->event_name);
 			}
@@ -2654,7 +2520,7 @@ void lttng_create_tracepoint_event_notifier_if_missing(struct lttng_event_notifi
 				event_notifier_enabler->base.user_token,
 				event_notifier_enabler->error_counter_index,
 				event_notifier_group, NULL,
-				LTTNG_KERNEL_ABI_TRACEPOINT);
+				LTTNG_KERNEL_ABI_TRACEPOINT, "");
 			if (IS_ERR(event_notifier)) {
 				printk(KERN_INFO "Unable to create event_notifier %s\n",
 					probe_desc->event_desc[i]->event_name);
