@@ -44,6 +44,7 @@
 #include <lttng/endian.h>
 #include <lttng/string-utils.h>
 #include <lttng/utils.h>
+#include <counter/counter.h>
 #include <ringbuffer/backend.h>
 #include <ringbuffer/frontend.h>
 #include <wrapper/time.h>
@@ -1377,7 +1378,7 @@ bool lttng_channel_current_id_full(struct lttng_kernel_channel_common *chan)
 		struct lttng_kernel_channel_buffer *chan_buffer =
 			container_of(chan, struct lttng_kernel_channel_buffer, parent);
 
-		return chan_buffer->free_event_id == -1U;
+		return chan_buffer->priv->free_event_id == -1U;
 	}
 	case LTTNG_KERNEL_CHANNEL_TYPE_COUNTER:
 	{
@@ -1385,16 +1386,16 @@ bool lttng_channel_current_id_full(struct lttng_kernel_channel_common *chan)
 			container_of(chan, struct lttng_kernel_channel_counter, parent);
 		size_t nr_dimensions, max_nr_elem;
 
-		if (lttng_counter_get_nr_dimensions(&chan_counter->counter->config,
-				chan_counter->counter, &nr_dimensions))
+		if (lttng_counter_get_nr_dimensions(&chan_counter->priv->counter->config,
+				chan_counter->priv->counter, &nr_dimensions))
 			return true;
 		WARN_ON_ONCE(nr_dimensions != 1);
 		if (nr_dimensions != 1)
 			return true;
-		if (lttng_counter_get_max_nr_elem(&chan_counter->counter->config,
-				chan_counter->counter, &max_nr_elem))
+		if (lttng_counter_get_max_nr_elem(&chan_counter->priv->counter->config,
+				chan_counter->priv->counter, &max_nr_elem))
 			return true;
-		return chan_counter->free_index >= max_nr_elem;
+		return chan_counter->priv->free_index >= max_nr_elem;
 	}
 	default:
 		WARN_ON_ONCE(1);
@@ -1406,9 +1407,9 @@ static
 int lttng_event_container_allocate_id(struct lttng_kernel_channel_common *chan,
 		const char *key_string, size_t *id)
 {
-	struct lttng_session *session = container->session;
+	struct lttng_kernel_session *session = chan->session;
 
-	switch (container->type) {
+	switch (chan->type) {
 	case LTTNG_KERNEL_CHANNEL_TYPE_BUFFER:
 	{
 		struct lttng_kernel_channel_buffer *chan_buffer =
@@ -1416,31 +1417,31 @@ int lttng_event_container_allocate_id(struct lttng_kernel_channel_common *chan,
 
 		if (lttng_channel_current_id_full(chan))
 			return -EMFILE;
-		*id = chan_buffer->free_event_id++;
+		*id = chan_buffer->priv->free_event_id++;
 		break;
 	}
 	case LTTNG_KERNEL_CHANNEL_TYPE_COUNTER:
 	{
 		struct lttng_kernel_channel_counter *chan_counter =
 			container_of(chan, struct lttng_kernel_channel_counter, parent);
-		struct lttng_kernel_event_counter_priv *event_counter_priv;
+		struct lttng_kernel_event_counter_private *event_counter_priv;
 
 		if (key_string[0]) {
 			struct hlist_head *head;
 
-			head = utils_borrow_hash_table_bucket(session->events_key_ht.table,
-				LTTNG_EVENT_HT_SIZE, key_string);
+			head = utils_borrow_hash_table_bucket(session->priv->events_key_ht.table,
+				LTTNG_KERNEL_EVENT_HT_SIZE, key_string);
 			lttng_hlist_for_each_entry(event_counter_priv, head, key_hlist) {
 				if (!strcmp(key_string, event_counter_priv->key)) {
 					/* Same key, use same id. */
-					*id = event->id;
+					*id = (size_t) event_counter_priv->counter_index;
 					return 0;
 				}
 			}
 		}
 		if (lttng_channel_current_id_full(chan))
 			return -EMFILE;
-		*id = chan_counter->free_index++;
+		*id = chan_counter->priv->free_index++;
 		break;
 	}
 	default:
@@ -1479,28 +1480,24 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 		ret = -EEXIST;
 		goto exist;
 	}
-	}
 	event_recorder = lttng_kernel_event_recorder_alloc();
 	if (!event_recorder) {
 		ret = -ENOMEM;
 		goto alloc_error;
 	}
-	if (lttng_event_container_allocate_id(&chan_buffer->parent, NULL, &id)) {
-		ret = -EMFILE;
-		goto full;
-	}
-	event_recorder->priv->id = (unsigned int) id;
-	event_recorder->chan = chan_buffer;
-
 	ret = lttng_kernel_event_init(itype, event_name, event_param,
 			event_desc, token, chan_buffer->priv->parent.coalesce_hits,
 			&event_recorder->parent);
 	if (ret) {
 		goto event_init_error;
 	}
+	event_recorder->priv->id = (unsigned int) id;
+	event_recorder->chan = chan_buffer;
 
-	/* Populate lttng_event structure before event registration. */
-	smp_wmb();
+	if (lttng_event_container_allocate_id(&chan_buffer->parent, NULL, &id)) {
+		ret = -EMFILE;
+		goto full;
+	}
 
 	ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder);
 	WARN_ON_ONCE(ret > 0);
@@ -1509,12 +1506,16 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 	}
 	hlist_add_head(&event_recorder->priv->parent.name_hlist, name_head);
 	list_add(&event_recorder->priv->parent.node, &session->priv->events);
+
+	/* Populate lttng_kernel_event_recorder structure before event registration. */
+	smp_wmb();
+
 	return event_recorder;
 
 statedump_error:
 	/* If a statedump error occurs, events will not be readable. */
-event_init_error:
 full:
+event_init_error:
 	lttng_kernel_event_free(&event_recorder->parent);
 alloc_error:
 exist:
@@ -1551,7 +1552,7 @@ struct lttng_kernel_event_counter *_lttng_kernel_event_counter_create(struct ltt
 		goto type_error;
 	}
 	if (lttng_kernel_session_event_lookup(session, event_name, key_string, token, event_desc,
-				&chan_buffer->parent, &name_head)) {
+				&chan_counter->parent, &name_head)) {
 		ret = -EEXIST;
 		goto exist;
 	}
@@ -1560,42 +1561,34 @@ struct lttng_kernel_event_counter *_lttng_kernel_event_counter_create(struct ltt
 		ret = -ENOMEM;
 		goto alloc_error;
 	}
-	if (lttng_event_container_allocate_id(&chan_counter->parent, key_string, &id)) {
-		ret = -EMFILE;
-		goto full;
-	}
-	event_counter->priv->counter_index = id;
-
-	key_head = utils_borrow_hash_table_bucket(session->events_key_ht.table,
-				LTTNG_EVENT_HT_SIZE, key_string);
-	hlist_add_head(&event_counter->priv->key_hlist, key_head);
-	strcpy(event_counter->priv->key, key_string);
-
-	event_counter->chan = chan_buffer;
-
 	ret = lttng_kernel_event_init(itype, event_name, event_param,
 			event_desc, token, chan_counter->priv->parent.coalesce_hits,
 			&event_counter->parent);
 	if (ret) {
 		goto event_init_error;
 	}
-
-	/* Populate lttng_event structure before event registration. */
-	smp_wmb();
-
-	ret = _lttng_event_metadata_statedump(session, chan_buffer, event_counter);
-	WARN_ON_ONCE(ret > 0);
-	if (ret) {
-		goto statedump_error;
+	if (lttng_event_container_allocate_id(&chan_counter->parent, key_string, &id)) {
+		ret = -EMFILE;
+		goto full;
 	}
+	event_counter->priv->counter_index = id;
+	event_counter->chan = chan_counter;
+
+	key_head = utils_borrow_hash_table_bucket(session->priv->events_key_ht.table,
+				LTTNG_KERNEL_EVENT_HT_SIZE, key_string);
+	hlist_add_head(&event_counter->priv->key_hlist, key_head);
+	strcpy(event_counter->priv->key, key_string);
+
 	hlist_add_head(&event_counter->priv->parent.name_hlist, name_head);
 	list_add(&event_counter->priv->parent.node, &session->priv->events);
+
+	/* Populate lttng_kernel_event_counter structure before event registration. */
+	smp_wmb();
+
 	return event_counter;
 
-statedump_error:
-	/* If a statedump error occurs, events will not be readable. */
-event_init_error:
 full:
+event_init_error:
 	lttng_kernel_event_free(&event_counter->parent);
 alloc_error:
 exist:
