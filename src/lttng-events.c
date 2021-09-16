@@ -234,6 +234,8 @@ struct lttng_kernel_session *lttng_session_create(void)
 	INIT_LIST_HEAD(&session_priv->enablers_head);
 	for (i = 0; i < LTTNG_KERNEL_EVENT_HT_SIZE; i++)
 		INIT_HLIST_HEAD(&session_priv->events_name_ht.table[i]);
+	for (i = 0; i < LTTNG_KERNEL_EVENT_HT_SIZE; i++)
+		INIT_HLIST_HEAD(&session_priv->events_key_ht.table[i]);
 	list_add(&session_priv->list, &sessions);
 
 	if (lttng_id_tracker_init(&session->pid_tracker, session, TRACKER_PID))
@@ -1074,13 +1076,15 @@ int lttng_kernel_event_init(enum lttng_kernel_abi_instrumentation itype,
 		struct lttng_kernel_abi_event *event_param,
 		const struct lttng_kernel_event_desc *event_desc,
 		uint64_t token,
+		bool coalesce_hits,
 		struct lttng_kernel_event_common *event)
 {
 	int ret;
 
 	event->run_filter = lttng_kernel_interpret_event_filter;
 	event->priv->instrumentation = itype;
-	event->priv->user_token = token;
+	if (!coalesce_hits)
+		event->priv->user_token = token;
 	INIT_LIST_HEAD(&event->priv->filter_bytecode_runtime_head);
 	INIT_LIST_HEAD(&event->priv->enablers_ref_head);
 
@@ -1364,6 +1368,89 @@ void lttng_kernel_event_free(struct lttng_kernel_event_common *event)
 	}
 }
 
+static
+bool lttng_channel_current_id_full(struct lttng_kernel_channel_common *chan)
+{
+	switch (chan->type) {
+	case LTTNG_KERNEL_CHANNEL_TYPE_BUFFER:
+	{
+		struct lttng_kernel_channel_buffer *chan_buffer =
+			container_of(chan, struct lttng_kernel_channel_buffer, parent);
+
+		return chan_buffer->free_event_id == -1U;
+	}
+	case LTTNG_KERNEL_CHANNEL_TYPE_COUNTER:
+	{
+		struct lttng_kernel_channel_counter *chan_counter =
+			container_of(chan, struct lttng_kernel_channel_counter, parent);
+		size_t nr_dimensions, max_nr_elem;
+
+		if (lttng_counter_get_nr_dimensions(&chan_counter->counter->config,
+				chan_counter->counter, &nr_dimensions))
+			return true;
+		WARN_ON_ONCE(nr_dimensions != 1);
+		if (nr_dimensions != 1)
+			return true;
+		if (lttng_counter_get_max_nr_elem(&chan_counter->counter->config,
+				chan_counter->counter, &max_nr_elem))
+			return true;
+		return chan_counter->free_index >= max_nr_elem;
+	}
+	default:
+		WARN_ON_ONCE(1);
+		return true;
+	}
+}
+
+static
+int lttng_event_container_allocate_id(struct lttng_kernel_channel_common *chan,
+		const char *key_string, size_t *id)
+{
+	struct lttng_session *session = container->session;
+
+	switch (container->type) {
+	case LTTNG_KERNEL_CHANNEL_TYPE_BUFFER:
+	{
+		struct lttng_kernel_channel_buffer *chan_buffer =
+			container_of(chan, struct lttng_kernel_channel_buffer, parent);
+
+		if (lttng_channel_current_id_full(chan))
+			return -EMFILE;
+		*id = chan_buffer->free_event_id++;
+		break;
+	}
+	case LTTNG_KERNEL_CHANNEL_TYPE_COUNTER:
+	{
+		struct lttng_kernel_channel_counter *chan_counter =
+			container_of(chan, struct lttng_kernel_channel_counter, parent);
+		struct lttng_kernel_event_counter_priv *event_counter_priv;
+
+		if (key_string[0]) {
+			struct hlist_head *head;
+
+			head = utils_borrow_hash_table_bucket(session->events_key_ht.table,
+				LTTNG_EVENT_HT_SIZE, key_string);
+			lttng_hlist_for_each_entry(event_counter_priv, head, key_hlist) {
+				if (!strcmp(key_string, event_counter_priv->key)) {
+					/* Same key, use same id. */
+					*id = event->id;
+					return 0;
+				}
+			}
+		}
+		if (lttng_channel_current_id_full(chan))
+			return -EMFILE;
+		*id = chan_counter->free_index++;
+		break;
+	}
+	default:
+		WARN_ON_ONCE(1);
+		return 0;
+	}
+
+	return 0;
+}
+
 /*
  * Supports event creation while tracing session is active.
  * Needs to be called with sessions mutex held.
@@ -1377,17 +1464,84 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 				const char *suffix)
 {
 	struct lttng_kernel_session *session = chan_buffer->parent.session;
-	char key_string[LTTNG_KEY_TOKEN_STRING_LEN_MAX];
 	char event_name[LTTNG_KERNEL_ABI_SYM_NAME_LEN];
 	struct lttng_kernel_event_recorder *event_recorder;
 	struct hlist_head *name_head;
-	size_t i;
+	size_t id;
 	int ret;
 
-	if (chan_buffer->priv->free_event_id == -1U) {
+	if (lttng_kernel_format_event_name(event_param, event_desc, itype, suffix, event_name)) {
+		ret = -EINVAL;
+		goto type_error;
+	}
+	if (lttng_kernel_session_event_lookup(session, event_name, NULL, token, event_desc,
+				&chan_buffer->parent, &name_head)) {
+		ret = -EEXIST;
+		goto exist;
+	}
+	}
+	event_recorder = lttng_kernel_event_recorder_alloc();
+	if (!event_recorder) {
+		ret = -ENOMEM;
+		goto alloc_error;
+	}
+	if (lttng_event_container_allocate_id(&chan_buffer->parent, NULL, &id)) {
 		ret = -EMFILE;
 		goto full;
 	}
+	event_recorder->priv->id = (unsigned int) id;
+	event_recorder->chan = chan_buffer;
+
+	ret = lttng_kernel_event_init(itype, event_name, event_param,
+			event_desc, token, chan_buffer->priv->parent.coalesce_hits,
+			&event_recorder->parent);
+	if (ret) {
+		goto event_init_error;
+	}
+
+	/* Populate lttng_event structure before event registration. */
+	smp_wmb();
+
+	ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder);
+	WARN_ON_ONCE(ret > 0);
+	if (ret) {
+		goto statedump_error;
+	}
+	hlist_add_head(&event_recorder->priv->parent.name_hlist, name_head);
+	list_add(&event_recorder->priv->parent.node, &session->priv->events);
+	return event_recorder;
+
+statedump_error:
+	/* If a statedump error occurs, events will not be readable. */
+event_init_error:
+full:
+	lttng_kernel_event_free(&event_recorder->parent);
+alloc_error:
+exist:
+type_error:
+	return NULL;
+}
+
+/*
+ * Supports event creation while tracing session is active.
+ * Needs to be called with sessions mutex held.
+ */
+struct lttng_kernel_event_counter *_lttng_kernel_event_counter_create(struct lttng_kernel_channel_counter *chan_counter,
+				struct lttng_kernel_abi_event *event_param,
+				const struct lttng_counter_key *key,
+				const struct lttng_kernel_event_desc *event_desc,
+				enum lttng_kernel_abi_instrumentation itype,
+				uint64_t token,
+				const char *suffix)
+{
+	struct lttng_kernel_session *session = chan_counter->parent.session;
+	char key_string[LTTNG_KEY_TOKEN_STRING_LEN_MAX];
+	char event_name[LTTNG_KERNEL_ABI_SYM_NAME_LEN];
+	struct lttng_kernel_event_counter *event_counter;
+	struct hlist_head *name_head, *key_head;
+	size_t id;
+	int ret;
+
 	if (lttng_kernel_format_event_name(event_param, event_desc, itype, suffix, event_name)) {
 		ret = -EINVAL;
 		goto type_error;
@@ -1401,17 +1555,27 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 		ret = -EEXIST;
 		goto exist;
 	}
-	event_recorder = lttng_kernel_event_recorder_alloc();
-	if (!event_recorder) {
+	event_counter = lttng_kernel_event_counter_alloc();
+	if (!event_counter) {
 		ret = -ENOMEM;
 		goto alloc_error;
 	}
-	event_recorder->chan = chan_buffer;
-	event_recorder->priv->id = chan_buffer->priv->free_event_id++;
+	if (lttng_event_container_allocate_id(&chan_counter->parent, key_string, &id)) {
+		ret = -EMFILE;
+		goto full;
+	}
+	event_counter->priv->counter_index = id;
+
+	key_head = utils_borrow_hash_table_bucket(session->events_key_ht.table,
+				LTTNG_EVENT_HT_SIZE, key_string);
+	hlist_add_head(&event_counter->priv->key_hlist, key_head);
+	strcpy(event_counter->priv->key, key_string);
+
+	event_counter->chan = chan_buffer;
 
 	ret = lttng_kernel_event_init(itype, event_name, event_param,
-			event_desc, token,
-			&event_recorder[i]->parent);
+			event_desc, token, chan_counter->priv->parent.coalesce_hits,
+			&event_counter->parent);
 	if (ret) {
 		goto event_init_error;
 	}
@@ -1419,38 +1583,24 @@ struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct l
 	/* Populate lttng_event structure before event registration. */
 	smp_wmb();
 
-	ret = _lttng_event_metadata_statedump(session, chan_buffer, event_recorder[i]);
+	ret = _lttng_event_metadata_statedump(session, chan_buffer, event_counter);
 	WARN_ON_ONCE(ret > 0);
 	if (ret) {
 		goto statedump_error;
 	}
-	hlist_add_head(&event_recorder->priv->parent.name_hlist, name_head);
-	list_add(&event_recorder[i]->priv->parent.node, &session->priv->events);
-	return event_recorder;
+	hlist_add_head(&event_counter->priv->parent.name_hlist, name_head);
+	list_add(&event_counter->priv->parent.node, &session->priv->events);
+	return event_counter;
 
 statedump_error:
 	/* If a statedump error occurs, events will not be readable. */
-register_error:
-	lttng_kernel_event_free(&event_recorder->parent);
+event_init_error:
+full:
+	lttng_kernel_event_free(&event_counter->parent);
 alloc_error:
 exist:
 type_error:
-full:
-	return ret;
-}
-
-/*
- * Supports event creation while tracing session is active.
- * Needs to be called with sessions mutex held.
- */
-struct lttng_kernel_event_counter *_lttng_kernel_event_counter_create(struct lttng_kernel_channel_counter *chan_counter,
-				struct lttng_kernel_abi_event *event_param,
-				const struct lttng_counter_key *key,
-				const struct lttng_kernel_event_desc *event_desc,
-				enum lttng_kernel_abi_instrumentation itype,
-				uint64_t token)
-{
-
+	return NULL;
 }
 
 struct lttng_kernel_event_notifier *_lttng_event_notifier_create(

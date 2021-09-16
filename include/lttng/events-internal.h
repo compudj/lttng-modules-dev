@@ -156,6 +156,7 @@ struct lttng_kernel_event_counter_private {
 
 	struct lttng_kernel_event_counter *pub;	/* Public event interface */
 	char key[LTTNG_KEY_TOKEN_STRING_LEN_MAX];
+	struct hlist_node key_hlist;
 	uint64_t counter_index;
 };
 
@@ -550,8 +551,10 @@ struct lttng_kernel_session_private {
 		tstate:1;			/* Transient enable state */
 	/* List of event enablers */
 	struct list_head enablers_head;
-	/* Hash table of events */
+	/* Hash table of events indexed by event name */
 	struct lttng_event_ht events_name_ht;
+	/* Hash table of events indexed by key */
+	struct lttng_event_ht events_key_ht;
 	char name[LTTNG_KERNEL_ABI_SESSION_NAME_LEN];
 	char creation_time[LTTNG_KERNEL_ABI_SESSION_CREATION_TIME_ISO8601_LEN];
 };
@@ -1141,13 +1144,15 @@ struct lttng_kernel_event_recorder *lttng_kernel_event_recorder_create(struct lt
 				const struct lttng_counter_key *key,
 				const struct lttng_kernel_event_desc *event_desc,
 				enum lttng_kernel_abi_instrumentation itype,
-				uint64_t token);
+				uint64_t token,
+				const char *suffix);
 struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct lttng_kernel_channel_buffer *chan_buffer,
 				struct lttng_kernel_abi_event *event_param,
 				const struct lttng_counter_key *key,
 				const struct lttng_kernel_event_desc *event_desc,
 				enum lttng_kernel_abi_instrumentation itype,
-				uint64_t token);
+				uint64_t token,
+				const char *suffix);
 
 int lttng_kernel_event_register(enum lttng_kernel_abi_instrumentation itype,
 		struct lttng_kernel_abi_event *event_param,
