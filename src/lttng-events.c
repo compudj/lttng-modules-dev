@@ -1188,6 +1188,72 @@ error:
 	return ret;
 }
 
+void lttng_event_enabler_session_from_args(enum lttng_kernel_abi_instrumentation itype,
+		struct lttng_kernel_abi_event *event_param,
+		struct lttng_kernel_channel_common *chan,
+		const struct lttng_counter_key *key,
+		const struct lttng_kernel_event_desc *event_desc,
+		uint64_t token,
+		enum lttng_event_enabler_type enabler_type,
+		struct lttng_event_enabler_session_common *event_enabler_session)
+{
+	switch (enabler_type) {
+	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
+	{
+		struct lttng_event_recorder_enabler *event_recorder_enabler =
+			container_of(event_enabler_session, struct lttng_event_recorder_enabler, parent);
+		struct lttng_kernel_channel_buffer *chan_buffer =
+			container_of(chan, struct lttng_kernel_channel_buffer, parent);
+//TODO
+		event_recorder_enabler->chan = chan_buffer;
+		event_recorder_enabler->parent.chan = chan;
+
+		break;
+	}
+	case LTTNG_EVENT_ENABLER_TYPE_COUNTER:
+	{
+		struct lttng_event_counter_enabler *event_counter_enabler =
+			container_of(event_enabler_session, struct lttng_event_counter_enabler, parent);
+		struct lttng_kernel_channel_counter *chan_counter =
+			container_of(chan, struct lttng_kernel_channel_counter, parent);
+
+//TODO
+		event_counter_enabler->chan = chan_counter;
+		event_counter_enabler->key = *key;
+		event_counter_enabler->parent.chan = chan;
+		break;
+	}
+	default:
+		WARN_ON_ONCE(1);
+	}
+}
+
+void lttng_event_notifier_enabler_from_args(enum lttng_kernel_abi_instrumentation itype,
+		struct lttng_event_notifier_group *event_notifier_group,
+		struct lttng_kernel_abi_event_notifier *event_notifier_param,
+		uint64_t id,
+		uint64_t error_counter_index,
+		const struct lttng_kernel_event_desc *event_desc,
+		struct lttng_event_notifier_enabler *event_notifier_enabler)
+{
+	event_notifier_enabler->parent.enabler_type = LTTNG_EVENT_ENABLER_TYPE_NOTIFIER;
+	event_notifier_enabler->parent.format_type = LTTNG_ENABLER_FORMAT_NONE;
+	INIT_LIST_HEAD(&event_notifier_enabler->parent.filter_bytecode_head);
+	memcpy(&event_notifier_enabler->parent.event_param, &event_notifier_param->event,
+		sizeof(event_notifier_enabler->parent.event_param));
+	event_notifier_enabler->parent.enabled = 0;
+	event_notifier_enabler->parent.user_token = id;
+
+	event_notifier_enabler->error_counter_index = error_counter_index;
+	INIT_LIST_HEAD(&event_notifier_enabler->capture_bytecode_head);
+	event_notifier_enabler->num_captures = 0;
+	event_notifier_enabler->group = event_notifier_group;
+
+}
+
+/*
+ * Needs to be called with sessions mutex held.
+ */
 int lttng_kernel_event_register(enum lttng_kernel_abi_instrumentation itype,
 		struct lttng_kernel_abi_event *event_param,
 		struct lttng_kernel_event_common *event,
@@ -1456,13 +1522,10 @@ int lttng_event_container_allocate_id(struct lttng_kernel_channel_common *chan,
  * Supports event creation while tracing session is active.
  * Needs to be called with sessions mutex held.
  */
-struct lttng_kernel_event_recorder *_lttng_kernel_event_recorder_create(struct lttng_kernel_channel_buffer *chan_buffer,
-				struct lttng_kernel_abi_event *event_param,
-				const struct lttng_counter_key *key,
-				const struct lttng_kernel_event_desc *event_desc,
-				enum lttng_kernel_abi_instrumentation itype,
-				uint64_t token,
-				const char *suffix)
+static
+struct lttng_kernel_event_recorder *lttng_kernel_event_recorder_create(
+		struct lttng_event_recorder_enabler *event_recorder_enabler,
+		const char *suffix)
 {
 	struct lttng_kernel_session *session = chan_buffer->parent.session;
 	char event_name[LTTNG_KERNEL_ABI_SYM_NAME_LEN];
@@ -1527,13 +1590,10 @@ type_error:
  * Supports event creation while tracing session is active.
  * Needs to be called with sessions mutex held.
  */
-struct lttng_kernel_event_counter *_lttng_kernel_event_counter_create(struct lttng_kernel_channel_counter *chan_counter,
-				struct lttng_kernel_abi_event *event_param,
-				const struct lttng_counter_key *key,
-				const struct lttng_kernel_event_desc *event_desc,
-				enum lttng_kernel_abi_instrumentation itype,
-				uint64_t token,
-				const char *suffix)
+static
+struct lttng_kernel_event_counter *lttng_kernel_event_counter_create(
+		struct lttng_event_counter_enabler *event_counter_enabler,
+		const char *suffix)
 {
 	struct lttng_kernel_session *session = chan_counter->parent.session;
 	char key_string[LTTNG_KEY_TOKEN_STRING_LEN_MAX];
@@ -1596,12 +1656,13 @@ type_error:
 	return ERR_PTR(ret);
 }
 
-struct lttng_kernel_event_notifier *_lttng_event_notifier_create(
-		const struct lttng_kernel_event_desc *event_desc,
-		uint64_t token, uint64_t error_counter_index,
-		struct lttng_event_notifier_group *event_notifier_group,
-		struct lttng_kernel_abi_event_notifier *event_notifier_param,
-		enum lttng_kernel_abi_instrumentation itype,
+/*
+ * Supports event creation while tracing session is active.
+ * Needs to be called with sessions mutex held.
+ */
+static
+struct lttng_kernel_event_notifier *lttng_event_notifier_create(
+		struct lttng_event_notifier_enabler *event_notifier_enabler,
 		const char *suffix)
 {
 	struct lttng_kernel_event_notifier_private *event_notifier_priv;
@@ -1688,6 +1749,53 @@ type_error:
 	return ERR_PTR(ret);
 }
 
+/*
+ * Supports event creation while tracing session is active.
+ * Needs to be called with sessions mutex held.
+ */
+struct lttng_kernel_event_common *lttng_kernel_event_common_create(struct lttng_event_enabler_common *enabler,
+		const char *suffix)
+{
+	switch (enabler->enabler_type) {
+	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
+	{
+		struct lttng_event_recorder_enabler *recorder_enabler =
+			container_of(enabler, struct lttng_event_recorder_enabler, parent.parent);
+		struct lttng_kernel_event_recorder *event_recorder;
+		
+		event_recorder = lttng_kernel_event_recorder_create(recorder_enabler, suffix);
+		if (IS_ERR(event_recorder))
+			return event_recorder;
+		return &event_recorder->parent.parent;
+	}
+	case LTTNG_EVENT_ENABLER_TYPE_NOTIFIER:
+	{
+		struct lttng_event_notifier_enabler *notifier_enabler =
+			container_of(enabler, struct lttng_event_notifier_enabler, parent);
+		struct lttng_kernel_event_notifier *event_notifier;
+		
+		event_notifier = lttng_kernel_event_notifier_create(notifier_enabler, suffix);
+		if (IS_ERR(event_notifier))
+			return event_notifier;
+		return &event_notifier->parent;
+	}
+	case LTTNG_EVENT_ENABLER_TYPE_COUNTER:
+	{
+		struct lttng_event_counter_enabler *counter_enabler =
+			container_of(enabler, struct lttng_event_counter_enabler, parent.parent);
+		struct lttng_kernel_event_counter *event_counter;
+		
+		event_counter = lttng_kernel_event_counter_create(counter_enabler, suffix);
+		if (IS_ERR(event_counter))
+			return event_counter;
+		return &event_counter->parent.parent;
+	}
+	default:
+		return ERR_PTR(-EINVAL);
+	}
+
+}
+
 int lttng_kernel_counter_read(struct lttng_kernel_channel_counter *counter,
 		const size_t *dim_indexes, int32_t cpu,
 		int64_t *val, bool *overflow, bool *underflow)
@@ -1708,40 +1816,6 @@ int lttng_kernel_counter_clear(struct lttng_kernel_channel_counter *counter,
 		const size_t *dim_indexes)
 {
 	return counter->ops->priv->counter_clear(counter, dim_indexes);
-}
-
-struct lttng_kernel_event_recorder *lttng_kernel_event_recorder_create(struct lttng_kernel_channel_buffer *chan,
-				struct lttng_kernel_abi_event *event_param,
-				const struct lttng_counter_key *key,
-				const struct lttng_kernel_event_desc *event_desc,
-				enum lttng_kernel_abi_instrumentation itype,
-				uint64_t token,
-				const char *suffix)
-{
-	struct lttng_kernel_event_recorder *event;
-
-	mutex_lock(&sessions_mutex);
-	event = _lttng_kernel_event_recorder_create(chan, event_param, key, event_desc, itype, token, suffix);
-	mutex_unlock(&sessions_mutex);
-	return event;
-}
-
-struct lttng_kernel_event_notifier *lttng_event_notifier_create(
-		const struct lttng_kernel_event_desc *event_desc,
-		uint64_t id, uint64_t error_counter_index,
-		struct lttng_event_notifier_group *event_notifier_group,
-		struct lttng_kernel_abi_event_notifier *event_notifier_param,
-		enum lttng_kernel_abi_instrumentation itype,
-		const char *suffix)
-{
-	struct lttng_kernel_event_notifier *event_notifier;
-
-	mutex_lock(&sessions_mutex);
-	event_notifier = _lttng_event_notifier_create(event_desc, id,
-		error_counter_index, event_notifier_group,
-		event_notifier_param, itype, suffix);
-	mutex_unlock(&sessions_mutex);
-	return event_notifier;
 }
 
 /* Only used for tracepoints for now. */
@@ -2516,7 +2590,7 @@ void lttng_create_tracepoint_event_notifier_if_missing(struct lttng_event_notifi
 			/*
 			 * We need to create a event_notifier for this event probe.
 			 */
-			event_notifier = _lttng_event_notifier_create(desc,
+			event_notifier = lttng_event_notifier_create(desc,
 				event_notifier_enabler->base.user_token,
 				event_notifier_enabler->error_counter_index,
 				event_notifier_group, NULL,

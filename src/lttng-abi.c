@@ -1870,7 +1870,7 @@ int lttng_abi_create_event(struct file *channel_file,
 	case LTTNG_KERNEL_ABI_TRACEPOINT:		/* Fall-through */
 	case LTTNG_KERNEL_ABI_SYSCALL:
 	{
-		struct lttng_event_enabler *event_enabler;
+		struct lttng_event_enabler_common *event_enabler;
 
 		if (strutils_is_star_glob_pattern(event_param->name)) {
 			/*
@@ -1896,15 +1896,18 @@ int lttng_abi_create_event(struct file *channel_file,
 		 * We tolerate no failure path after event creation. It
 		 * will stay invariant for the rest of the session.
 		 */
+		lttng_lock_sessions();
 		event = lttng_kernel_event_recorder_create(channel, event_param,
 				NULL, event_param->instrumentation, "");
 		WARN_ON_ONCE(!event);
 		if (IS_ERR(event)) {
 			ret = PTR_ERR(event);
+			lttng_unlock_sessions();
 			goto event_error;
 		}
 		ret = lttng_kernel_event_register(event_param->instrumentation,
 				event_param, &event->parent, NULL);
+		lttng_unlock_sessions();
 		if (ret) {
 			goto event_error;
 		}
@@ -1919,11 +1922,13 @@ int lttng_abi_create_event(struct file *channel_file,
 		 * We tolerate no failure path after event creation. It
 		 * will stay invariant for the rest of the session.
 		 */
+		lttng_lock_sessions();
 		event_entry = lttng_kernel_event_recorder_create(channel, event_param,
 				NULL, event_param->instrumentation, "_entry");
 		WARN_ON_ONCE(IS_ERR(event));
 		if (IS_ERR(event)) {
 			ret = PTR_ERR(event);
+			lttng_unlock_sessions();
 			goto event_error;
 		}
 		event_exit = lttng_kernel_event_recorder_create(channel, event_param,
@@ -1931,11 +1936,13 @@ int lttng_abi_create_event(struct file *channel_file,
 		WARN_ON_ONCE(IS_ERR(event));
 		if (IS_ERR(event)) {
 			ret = PTR_ERR(event);
+			lttng_unlock_sessions();
 			goto event_error;
 		}
 		ret = lttng_kernel_event_register(event_param->instrumentation,
 				event_param, &event_entry->parent,
 				&event_exit->parent);
+		lttng_unlock_sessions();
 		if (ret) {
 			goto event_error;
 		}
@@ -2154,6 +2161,7 @@ int lttng_abi_create_event_notifier(struct file *event_notifier_group_file,
 		 * We tolerate no failure path after event notifier creation.
 		 * It will stay invariant for the rest of the session.
 		 */
+		lttng_lock_sessions();
 		event_notifier = lttng_event_notifier_create(NULL,
 				event_notifier_param->event.token,
 				event_notifier_param->error_counter_index,
@@ -2162,11 +2170,13 @@ int lttng_abi_create_event_notifier(struct file *event_notifier_group_file,
 				event_notifier_param->event.instrumentation, "");
 		WARN_ON_ONCE(IS_ERR(event_notifier));
 		if (IS_ERR(event_notifier)) {
+			lttng_unlock_sessions();
 			ret = PTR_ERR(event_notifier);
 			goto event_notifier_error;
 		}
 		ret = lttng_kernel_event_register(event_notifier_param->event.instrumentation,
 				&event_notifier_param->event, &event_notifier->parent, NULL);
+		lttng_unlock_sessions();
 		if (ret) {
 			goto event_notifier_error;
 		}
