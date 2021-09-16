@@ -1746,24 +1746,24 @@ struct lttng_kernel_event_notifier *lttng_event_notifier_create(
 
 /* Only used for tracepoints for now. */
 static
-void register_event(struct lttng_kernel_event_recorder *event_recorder)
+void register_event(struct lttng_kernel_event_common *event)
 {
 	const struct lttng_kernel_event_desc *desc;
 	int ret = -EINVAL;
 
-	if (event_recorder->priv->parent.registered)
+	if (event->priv->registered)
 		return;
 
-	desc = event_recorder->priv->parent.desc;
-	switch (event_recorder->priv->parent.instrumentation) {
+	desc = event->priv->desc;
+	switch (event->priv->instrumentation) {
 	case LTTNG_KERNEL_ABI_TRACEPOINT:
 		ret = lttng_wrapper_tracepoint_probe_register(desc->event_kname,
 						  desc->tp_class->probe_callback,
-						  event_recorder);
+						  event);
 		break;
 
 	case LTTNG_KERNEL_ABI_SYSCALL:
-		ret = lttng_syscall_filter_enable_event(event_recorder->chan, event_recorder);
+		ret = lttng_syscall_filter_enable_event(event);
 		break;
 
 	case LTTNG_KERNEL_ABI_KPROBE:		/* Fall-through */
@@ -1778,7 +1778,7 @@ void register_event(struct lttng_kernel_event_recorder *event_recorder)
 		WARN_ON_ONCE(1);
 	}
 	if (!ret)
-		event_recorder->priv->parent.registered = 1;
+		event->priv->registered = 1;
 }
 
 /*
@@ -1812,7 +1812,7 @@ int _lttng_event_unregister(struct lttng_kernel_event_common *event)
 		break;
 
 	case LTTNG_KERNEL_ABI_SYSCALL:
-		ret = lttng_syscall_filter_disable_event(event_recorder->chan, event);
+		ret = lttng_syscall_filter_disable_event(event);
 		break;
 
 	case LTTNG_KERNEL_ABI_NOOP:
