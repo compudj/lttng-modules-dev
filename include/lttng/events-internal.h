@@ -882,7 +882,7 @@ int lttng_syscall_filter_disable_event(struct lttng_kernel_event_common *event);
 int lttng_syscalls_unregister_channel(struct lttng_kernel_channel_common_private *chan);
 int lttng_syscalls_destroy_channel(struct lttng_kernel_channel_common_private *chan);
 
-long lttng_channel_syscall_mask(struct lttng_kernel_channel_buffer *channel,
+long lttng_channel_syscall_mask(struct lttng_kernel_channel_common *channel,
 		struct lttng_kernel_abi_syscall_mask __user *usyscall_mask);
 
 int lttng_syscalls_register_event_notifier(
@@ -916,7 +916,7 @@ static inline int lttng_syscall_filter_disable_event(struct lttng_kernel_event_c
 	return -ENOSYS;
 }
 
-static inline long lttng_channel_syscall_mask(struct lttng_kernel_channel_buffer *channel,
+static inline long lttng_channel_syscall_mask(struct lttng_kernel_channel_common *channel,
 		struct lttng_kernel_syscall_mask __user *usyscall_mask)
 {
 	return -ENOSYS;
