@@ -1194,25 +1194,25 @@ int lttng_syscalls_unregister_event_notifier_group(
 	return 0;
 }
 
-int lttng_syscalls_unregister_channel(struct lttng_kernel_channel_buffer *chan)
+int lttng_syscalls_unregister_channel(struct lttng_kernel_channel_common_private *chan_priv)
 {
 	int ret;
 
-	if (!chan->priv->parent.sc_table)
+	if (!chan_priv->sc_table)
 		return 0;
-	if (chan->priv->parent.sys_enter_registered) {
+	if (chan_priv->sys_enter_registered) {
 		ret = lttng_wrapper_tracepoint_probe_unregister("sys_enter",
 				(void *) syscall_entry_event_probe, chan);
 		if (ret)
 			return ret;
-		chan->priv->parent.sys_enter_registered = 0;
+		chan_priv->sys_enter_registered = 0;
 	}
-	if (chan->priv->parent.sys_exit_registered) {
+	if (chan_priv->sys_exit_registered) {
 		ret = lttng_wrapper_tracepoint_probe_unregister("sys_exit",
 				(void *) syscall_exit_event_probe, chan);
 		if (ret)
 			return ret;
-		chan->priv->parent.sys_exit_registered = 0;
+		chan_priv->sys_exit_registered = 0;
 	}
 	return 0;
 }
@@ -1374,6 +1374,7 @@ int lttng_syscall_filter_enable(
 	return 0;
 }
 
+static
 int lttng_syscall_filter_enable_event_notifier(
 		struct lttng_kernel_event_notifier *event_notifier)
 {
@@ -1381,8 +1382,6 @@ int lttng_syscall_filter_enable_event_notifier(
 	unsigned int syscall_id = event_notifier->priv->parent.u.syscall.syscall_id;
 	struct hlist_head *dispatch_list;
 	int ret = 0;
-
-	WARN_ON_ONCE(event_notifier->priv->parent.instrumentation != LTTNG_KERNEL_ABI_SYSCALL);
 
 	ret = lttng_syscall_filter_enable(group->sc_filter,
 		event_notifier->priv->parent.desc->event_name,
@@ -1427,19 +1426,35 @@ int lttng_syscall_filter_enable_event_notifier(
 	hlist_add_head_rcu(&event_notifier->priv->parent.u.syscall.node, dispatch_list);
 
 end:
-	return ret ;
+	return ret;
 }
 
-int lttng_syscall_filter_enable_event(
-		struct lttng_kernel_channel_buffer *channel,
-		struct lttng_kernel_event_recorder *event_recorder)
+int lttng_syscall_filter_enable_event(struct lttng_kernel_event_common *event)
 {
-	WARN_ON_ONCE(event_recorder->priv->parent.instrumentation != LTTNG_KERNEL_ABI_SYSCALL);
+	struct lttng_kernel_event_common_private *event_priv = event->priv;
 
-	return lttng_syscall_filter_enable(channel->priv->parent.sc_filter,
-		event_recorder->priv->parent.desc->event_name,
-		event_recorder->priv->parent.u.syscall.abi,
-		event_recorder->priv->parent.u.syscall.entryexit);
+	WARN_ON_ONCE(event_priv->instrumentation != LTTNG_KERNEL_ABI_SYSCALL);
+
+	switch (event->type) {
+	case LTTNG_KERNEL_EVENT_TYPE_RECORDER:	/* Fall-through */
+	case LTTNG_KERNEL_EVENT_TYPE_COUNTER:
+	{
+		struct lttng_kernel_event_session_common_private *event_session_priv =
+				container_of(event_priv, struct lttng_kernel_event_session_common_private, parent);
+
+		return lttng_syscall_filter_enable(event_session_priv->chan->priv->sc_filter,
+			event->priv->desc->event_name,
+			event->priv->u.syscall.abi,
+			event->priv->u.syscall.entryexit);
+	}
+	case LTTNG_KERNEL_EVENT_TYPE_NOTIFIER:
+	{
+		struct lttng_kernel_event_notifier *event_notifier =
+				container_of(event, struct lttng_kernel_event_notifier, parent);
+		return lttng_syscall_filter_enable_event_notifier(event_notifier);
+	}
+	}
+	return -EINVAL;
 }
 
 static
@@ -1502,13 +1517,12 @@ int lttng_syscall_filter_disable(
 	return 0;
 }
 
+static
 int lttng_syscall_filter_disable_event_notifier(
 		struct lttng_kernel_event_notifier *event_notifier)
 {
 	struct lttng_event_notifier_group *group = event_notifier->priv->group;
 	int ret;
-
-	WARN_ON_ONCE(event_notifier->priv->parent.instrumentation != LTTNG_KERNEL_ABI_SYSCALL);
 
 	ret = lttng_syscall_filter_disable(group->sc_filter,
 		event_notifier->priv->parent.desc->event_name,
@@ -1520,14 +1534,32 @@ int lttng_syscall_filter_disable_event_notifier(
 	return 0;
 }
 
-int lttng_syscall_filter_disable_event(
-		struct lttng_kernel_channel_buffer *channel,
-		struct lttng_kernel_event_recorder *event_recorder)
+int lttng_syscall_filter_disable_event(struct lttng_kernel_event_common *event)
 {
-	return lttng_syscall_filter_disable(channel->priv->parent.sc_filter,
-		event_recorder->priv->parent.desc->event_name,
-		event_recorder->priv->parent.u.syscall.abi,
-		event_recorder->priv->parent.u.syscall.entryexit);
+	struct lttng_kernel_event_common_private *event_priv = event->priv;
+
+	WARN_ON_ONCE(event_priv->instrumentation != LTTNG_KERNEL_ABI_SYSCALL);
+
+	switch (event->type) {
+	case LTTNG_KERNEL_EVENT_TYPE_RECORDER:	/* Fall-through */
+	case LTTNG_KERNEL_EVENT_TYPE_COUNTER:
+	{
+		struct lttng_kernel_event_session_common_private *event_session_priv =
+				container_of(event_priv, struct lttng_kernel_event_session_common_private, parent);
+
+		return lttng_syscall_filter_disable(event_session_priv->chan->priv->sc_filter,
+			event->priv->desc->event_name,
+			event->priv->u.syscall.abi,
+			event->priv->u.syscall.entryexit);
+	}
+	case LTTNG_KERNEL_EVENT_TYPE_NOTIFIER:
+	{
+		struct lttng_kernel_event_notifier *event_notifier =
+				container_of(event, struct lttng_kernel_event_notifier, parent);
+		return lttng_syscall_filter_disable_event_notifier(event_notifier);
+	}
+	}
+	return -EINVAL;
 }
 
 static
@@ -1644,7 +1676,7 @@ const struct file_operations lttng_syscall_list_fops = {
 /*
  * A syscall is enabled if it is traced for either entry or exit.
  */
-long lttng_channel_syscall_mask(struct lttng_kernel_channel_buffer *channel,
+long lttng_channel_syscall_mask(struct lttng_kernel_channel_common *channel,
 		struct lttng_kernel_abi_syscall_mask __user *usyscall_mask)
 {
 	uint32_t len, sc_tables_len, bitmask_len;
@@ -1664,14 +1696,14 @@ long lttng_channel_syscall_mask(struct lttng_kernel_channel_buffer *channel,
 	tmp_mask = kzalloc(bitmask_len, GFP_KERNEL);
 	if (!tmp_mask)
 		return -ENOMEM;
-	filter = channel->priv->parent.sc_filter;
+	filter = channel->priv->sc_filter;
 
 	for (bit = 0; bit < sc_table.len; bit++) {
 		char state;
 
-		if (channel->priv->parent.sc_table) {
-			if (!(READ_ONCE(channel->priv->parent.syscall_all_entry)
-					|| READ_ONCE(channel->priv->parent.syscall_all_exit)) && filter)
+		if (channel->priv->sc_table) {
+			if (!(READ_ONCE(channel->priv->syscall_all_entry)
+					|| READ_ONCE(channel->priv->syscall_all_exit)) && filter)
 				state = test_bit(bit, filter->sc_entry)
 					|| test_bit(bit, filter->sc_exit);
 			else
@@ -1684,9 +1716,9 @@ long lttng_channel_syscall_mask(struct lttng_kernel_channel_buffer *channel,
 	for (; bit < sc_tables_len; bit++) {
 		char state;
 
-		if (channel->priv->parent.compat_sc_table) {
-			if (!(READ_ONCE(channel->priv->parent.syscall_all_entry)
-					|| READ_ONCE(channel->priv->parent.syscall_all_exit)) && filter)
+		if (channel->priv->compat_sc_table) {
+			if (!(READ_ONCE(channel->priv->syscall_all_entry)
+					|| READ_ONCE(channel->priv->syscall_all_exit)) && filter)
 				state = test_bit(bit - sc_table.len,
 						filter->sc_compat_entry)
 					|| test_bit(bit - sc_table.len,

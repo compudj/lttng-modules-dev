@@ -1926,7 +1926,7 @@ void register_event_notifier(struct lttng_kernel_event_notifier *event_notifier)
 		break;
 
 	case LTTNG_KERNEL_ABI_SYSCALL:
-		ret = lttng_syscall_filter_enable_event_notifier(event_notifier);
+		ret = lttng_syscall_filter_enable_event(&event_notifier->parent);
 		break;
 
 	case LTTNG_KERNEL_ABI_KPROBE:		/* Fall-through */
@@ -1973,7 +1973,7 @@ int _lttng_event_notifier_unregister(
 		break;
 
 	case LTTNG_KERNEL_ABI_SYSCALL:
-		ret = lttng_syscall_filter_disable_event_notifier(event_notifier);
+		ret = lttng_syscall_filter_disable_event(&event_notifier->parent);
 		break;
 
 	case LTTNG_KERNEL_ABI_KRETPROBE:	/* Fall-through */
