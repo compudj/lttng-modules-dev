@@ -408,7 +408,7 @@ void metadata_cache_destroy(struct kref *kref)
 
 void lttng_session_destroy(struct lttng_kernel_session *session)
 {
-	struct lttng_kernel_channel_buffer_private *chan_priv, *tmpchan_priv;
+	struct lttng_kernel_channel_common_private *chan_priv, *tmpchan_priv;
 	struct lttng_kernel_event_session_common_private *event_priv, *tmpevent_priv;
 	struct lttng_metadata_stream *metadata_stream;
 	struct lttng_event_enabler_session_common *event_enabler, *tmp_event_enabler;

@@ -891,31 +891,27 @@ int lttng_syscalls_create_matching_event_notifiers(
 		struct lttng_event_notifier_enabler *event_notifier_enabler);
 int lttng_syscalls_unregister_event_notifier_group(struct lttng_event_notifier_group *group);
 #else
-//TODO
-static inline int lttng_syscalls_register_event(
-		struct lttng_event_enabler *event_enabler)
+static inline int lttng_syscalls_register_event(struct lttng_event_enabler *event_enabler)
 {
 	return -ENOSYS;
 }
 
-static inline int lttng_syscalls_unregister_channel(struct lttng_kernel_channel_buffer *chan)
+static inline int lttng_syscalls_unregister_channel(struct lttng_kernel_channel_common_private *chan)
 {
 	return 0;
 }
 
-static inline int lttng_syscalls_destroy(struct lttng_kernel_channel_buffer *chan)
+static inline int lttng_syscalls_destroy_channel(struct lttng_kernel_channel_common_private *chan)
 {
 	return 0;
 }
 
-static inline int lttng_syscall_filter_enable_event(struct lttng_kernel_channel_buffer *chan,
-		struct lttng_kernel_event_recorder *event);
+static inline int lttng_syscall_filter_enable_event(struct lttng_kernel_event_common *event)
 {
 	return -ENOSYS;
 }
 
-static inline int lttng_syscall_filter_disable_event(struct lttng_kernel_channel_buffer *chan,
-		struct lttng_kernel_event_recorder *event);
+static inline int lttng_syscall_filter_disable_event(struct lttng_kernel_event_common *event)
 {
 	return -ENOSYS;
 }
@@ -932,26 +928,17 @@ static inline int lttng_syscalls_register_event_notifier(
 	return -ENOSYS;
 }
 
+int lttng_syscalls_create_matching_event_notifiers(
+		struct lttng_event_notifier_enabler *event_notifier_enabler)
+{
+	return -ENOSYS;
+}
+
 static inline int lttng_syscalls_unregister_event_notifier_group(
 		struct lttng_event_notifier_group *group)
 {
 	return 0;
 }
-
-static inline int lttng_syscall_filter_enable_event_notifier(
-		struct lttng_event_notifier_group *group,
-		const char *name)
-{
-	return -ENOSYS;
-}
-
-static inline int lttng_syscall_filter_disable_event_notifier(
-		struct lttng_event_notifier_group *group,
-		const char *name)
-{
-	return -ENOSYS;
-}
-
 #endif
 
 #ifdef CONFIG_KPROBES
