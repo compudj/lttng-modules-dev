@@ -640,7 +640,7 @@ int lttng_session_metadata_regenerate(struct lttng_kernel_session *session)
 		if (chan->type != LTTNG_KERNEL_CHANNEL_TYPE_BUFFER)
 			continue;
 		chan_buf_priv = container_of(chan_priv, struct lttng_kernel_channel_buffer_private, parent);
-		chan_priv->metadata_dumped = 0;
+		chan_buf_priv->metadata_dumped = 0;
 	}
 
 	list_for_each_entry(event_session_common_priv, &session->priv->events, node) {
@@ -975,11 +975,11 @@ active:
 static
 void lttng_channel_buffer_destroy(struct lttng_kernel_channel_buffer *chan_buf)
 {
-	chan_buf->ops->priv->chan_bufnel_destroy(chan_buf->priv->rb_chan_buf);
+	chan_buf->ops->priv->channel_destroy(chan_buf->priv->rb_chan);
 	module_put(chan_buf->priv->transport->owner);
-	list_del(&chan_buf->priv->node);
+	list_del(&chan_buf->priv->parent.node);
 	lttng_kernel_destroy_context(chan_buf->priv->ctx);
-	lttng_kernel_free_chan_bufnel_common(&chan_buf->parent);
+	lttng_kernel_free_channel_common(&chan_buf->parent);
 }
 
 static
@@ -999,11 +999,11 @@ void _lttng_channel_destroy(struct lttng_kernel_channel_common *chan)
 	switch (chan->type) {
 	case LTTNG_KERNEL_CHANNEL_TYPE_BUFFER:
 		lttng_channel_buffer_destroy(container_of(chan,
-					struct lttng_kernel_channel_buffer, parent);
+					struct lttng_kernel_channel_buffer, parent));
 		break;
 	case LTTNG_KERNEL_CHANNEL_TYPE_COUNTER:
 		lttng_channel_counter_destroy(container_of(chan,
-					struct lttng_kernel_channel_buffer, parent);
+					struct lttng_kernel_channel_counter, parent));
 		break;
 	}
 }
@@ -1014,7 +1014,7 @@ void lttng_metadata_channel_destroy(struct lttng_kernel_channel_buffer *chan)
 
 	/* Protect the metadata cache with the sessions_mutex. */
 	mutex_lock(&sessions_mutex);
-	_lttng_channel_destroy(chan);
+	_lttng_channel_destroy(&chan->parent);
 	mutex_unlock(&sessions_mutex);
 }
 EXPORT_SYMBOL_GPL(lttng_metadata_channel_destroy);
@@ -1579,6 +1579,7 @@ struct lttng_kernel_event_recorder *lttng_kernel_event_recorder_create(
 		struct lttng_event_recorder_enabler *event_recorder_enabler,
 		const char *suffix)
 {
+	struct lttng_kernel_channel_buffer *chan_buffer = event_recorder_enabler->chan;
 	struct lttng_kernel_session *session = chan_buffer->parent.session;
 	char event_name[LTTNG_KERNEL_ABI_SYM_NAME_LEN];
 	struct lttng_kernel_event_recorder *event_recorder;
@@ -1586,7 +1587,8 @@ struct lttng_kernel_event_recorder *lttng_kernel_event_recorder_create(
 	size_t id;
 	int ret;
 
-	if (lttng_kernel_format_event_name(event_param, event_desc, itype, suffix, event_name)) {
+	if (lttng_kernel_format_event_name(event_recorder_enabler->parent.parent.event_param,
+			event_desc, itype, suffix, event_name)) {
 		ret = -EINVAL;
 		goto type_error;
 	}

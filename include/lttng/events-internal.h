@@ -115,8 +115,6 @@ struct lttng_kernel_event_common_private {
 	int registered;					/* has registered probe */
 	uint64_t user_token;
 
-	struct hlist_node name_hlist;	/* Hash table of events, indexed by name */
-
 	int has_enablers_without_filter_bytecode;
 	/* list of struct lttng_kernel_bytecode_runtime, sorted by seqnum */
 	struct list_head filter_bytecode_runtime_head;
@@ -143,6 +141,8 @@ struct lttng_kernel_event_session_common_private {
 
 	struct list_head node;		/* Event list */
 	struct lttng_kernel_ctx *ctx;
+
+	struct hlist_node name_hlist;	/* Hash table of events, indexed by name */
 
 	struct lttng_kernel_channel_common *chan;
 };
