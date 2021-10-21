@@ -15,6 +15,7 @@ struct lttng_metadata_cache;
 struct perf_event;
 struct perf_event_attr;
 struct lttng_kernel_ring_buffer_config;
+struct lttng_kernel_syscall_mask;
 
 enum lttng_enabler_format_type {
 	LTTNG_ENABLER_FORMAT_STAR_GLOB,
@@ -208,6 +209,7 @@ struct lttng_kernel_channel_common_private {
 	bool coalesce_hits;
 	unsigned int tstate:1;			/* Transient enable state */
 
+	struct list_head node;			/* Channel list (in session) */
 	struct lttng_kernel_syscall_table syscall_table;
 };
 
@@ -224,7 +226,6 @@ struct lttng_kernel_channel_buffer_private {
 	struct lttng_kernel_ctx *ctx;
 	struct lttng_kernel_ring_buffer_channel *rb_chan;		/* Ring buffer channel */
 	unsigned int metadata_dumped:1;
-	struct list_head node;			/* Channel list in session */
 	struct lttng_transport *transport;
 };
 
@@ -482,7 +483,6 @@ struct lttng_kernel_channel_counter_private {
 
 	/* Session owner. */
 	struct lttng_session *session;
-	struct list_head node;				/* Counter list (in session) */
 	size_t free_index;				/* Next index to allocate */
 };
 
@@ -879,8 +879,8 @@ int lttng_syscalls_register_event(struct lttng_event_enabler_common *event_enabl
 int lttng_syscall_filter_enable_event(struct lttng_kernel_event_common *event);
 int lttng_syscall_filter_disable_event(struct lttng_kernel_event_common *event);
 
-int lttng_syscalls_unregister_channel(struct lttng_kernel_channel_common_private *chan);
-int lttng_syscalls_destroy_channel(struct lttng_kernel_channel_common_private *chan);
+int lttng_syscalls_unregister_channel(struct lttng_kernel_channel_common *chan);
+int lttng_syscalls_destroy_channel(struct lttng_kernel_channel_common *chan);
 
 long lttng_channel_syscall_mask(struct lttng_kernel_channel_common *channel,
 		struct lttng_kernel_abi_syscall_mask __user *usyscall_mask);
@@ -896,12 +896,12 @@ static inline int lttng_syscalls_register_event(struct lttng_event_enabler_commo
 	return -ENOSYS;
 }
 
-static inline int lttng_syscalls_unregister_channel(struct lttng_kernel_channel_common_private *chan)
+static inline int lttng_syscalls_unregister_channel(struct lttng_kernel_channel_common *chan)
 {
 	return 0;
 }
 
-static inline int lttng_syscalls_destroy_channel(struct lttng_kernel_channel_common_private *chan)
+static inline int lttng_syscalls_destroy_channel(struct lttng_kernel_channel_common *chan)
 {
 	return 0;
 }
@@ -922,8 +922,7 @@ static inline long lttng_channel_syscall_mask(struct lttng_kernel_channel_common
 	return -ENOSYS;
 }
 
-static inline int lttng_syscalls_register_event_notifier(
-		struct lttng_event_notifier_group *group)
+static inline int lttng_syscalls_register_event_notifier(struct lttng_event_notifier_group *group)
 {
 	return -ENOSYS;
 }
@@ -934,8 +933,7 @@ int lttng_syscalls_create_matching_event_notifiers(
 	return -ENOSYS;
 }
 
-static inline int lttng_syscalls_unregister_event_notifier_group(
-		struct lttng_event_notifier_group *group)
+static inline int lttng_syscalls_unregister_event_notifier_group(struct lttng_event_notifier_group *group)
 {
 	return 0;
 }
@@ -1126,8 +1124,8 @@ struct lttng_kernel_event_recorder *lttng_event_compat_old_create(struct lttng_k
 		struct lttng_kernel_abi_old_event *old_event_param,
 		const struct lttng_kernel_event_desc *internal_desc);
 
-int lttng_channel_enable(struct lttng_kernel_channel_buffer *channel);
-int lttng_channel_disable(struct lttng_kernel_channel_buffer *channel);
+int lttng_channel_enable(struct lttng_kernel_channel_common *channel);
+int lttng_channel_disable(struct lttng_kernel_channel_common *channel);
 int lttng_event_enable(struct lttng_kernel_event_common *event);
 int lttng_event_disable(struct lttng_kernel_event_common *event);
 

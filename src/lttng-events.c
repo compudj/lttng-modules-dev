@@ -72,7 +72,7 @@ static void lttng_event_enabler_destroy(struct lttng_event_enabler_common *event
 static void lttng_event_notifier_group_sync_enablers(struct lttng_event_notifier_group *event_notifier_group);
 
 static void _lttng_event_destroy(struct lttng_kernel_event_common *event);
-static void _lttng_channel_destroy(struct lttng_kernel_channel_buffer *chan);
+static void _lttng_channel_destroy(struct lttng_kernel_channel_common *chan);
 static int _lttng_event_unregister(struct lttng_kernel_event_common *event);
 static int _lttng_event_notifier_unregister(struct lttng_kernel_event_notifier *event_notifier);
 static
@@ -426,7 +426,7 @@ void lttng_session_destroy(struct lttng_kernel_session *session)
 	}
 	synchronize_trace();	/* Wait for in-flight events to complete */
 	list_for_each_entry(chan_priv, &session->priv->chan, node) {
-		ret = lttng_syscalls_destroy_event(chan_priv->pub);
+		ret = lttng_syscalls_destroy_channel(chan_priv->pub);
 		WARN_ON(ret);
 	}
 	list_for_each_entry_safe(event_enabler, tmp_event_enabler,
@@ -434,10 +434,8 @@ void lttng_session_destroy(struct lttng_kernel_session *session)
 		lttng_event_enabler_destroy(&event_enabler->parent);
 	list_for_each_entry_safe(event_priv, tmpevent_priv, &session->priv->events, node)
 		_lttng_event_destroy(event_priv->parent.pub);
-	list_for_each_entry_safe(chan_priv, tmpchan_priv, &session->priv->chan, node) {
-		BUG_ON(chan_priv->channel_type == METADATA_CHANNEL);
+	list_for_each_entry_safe(chan_priv, tmpchan_priv, &session->priv->chan, node)
 		_lttng_channel_destroy(chan_priv->pub);
-	}
 	mutex_lock(&session->priv->metadata_cache->lock);
 	list_for_each_entry(metadata_stream, &session->priv->metadata_cache->metadata_stream, list)
 		_lttng_metadata_channel_hangup(metadata_stream);
@@ -481,7 +479,7 @@ void lttng_event_notifier_group_destroy(
 
 	irq_work_sync(&event_notifier_group->wakeup_pending);
 
-	kfree(event_notifier_group->sc_filter);
+	kfree(event_notifier_group->syscall_table.sc_filter);
 
 	list_for_each_entry_safe(event_notifier_enabler, tmp_event_notifier_enabler,
 			&event_notifier_group->enablers_head, node)
@@ -517,7 +515,7 @@ int lttng_session_statedump(struct lttng_kernel_session *session)
 int lttng_session_enable(struct lttng_kernel_session *session)
 {
 	int ret = 0;
-	struct lttng_kernel_channel_buffer_private *chan_priv;
+	struct lttng_kernel_channel_common_private *chan_priv;
 
 	mutex_lock(&sessions_mutex);
 	if (session->active) {
@@ -536,18 +534,31 @@ int lttng_session_enable(struct lttng_kernel_session *session)
 	 * we need to use.
 	 */
 	list_for_each_entry(chan_priv, &session->priv->chan, node) {
-		if (chan_priv->header_type)
+		struct lttng_kernel_channel_common *chan = chan_priv->pub;
+		struct lttng_kernel_channel_buffer_private *chan_buf_priv;
+
+		if (chan->type != LTTNG_KERNEL_CHANNEL_TYPE_BUFFER)
+			continue;
+		chan_buf_priv = container_of(chan_priv, struct lttng_kernel_channel_buffer_private, parent);
+		if (chan_buf_priv->header_type)
 			continue;			/* don't change it if session stop/restart */
-		if (chan_priv->free_event_id < 31)
-			chan_priv->header_type = 1;	/* compact */
+		if (chan_buf_priv->free_event_id < 31)
+			chan_buf_priv->header_type = 1;	/* compact */
 		else
-			chan_priv->header_type = 2;	/* large */
+			chan_buf_priv->header_type = 2;	/* large */
 	}
 
 	/* Clear each stream's quiescent state. */
 	list_for_each_entry(chan_priv, &session->priv->chan, node) {
-		if (chan_priv->channel_type != METADATA_CHANNEL)
-			lib_ring_buffer_clear_quiescent_channel(chan_priv->rb_chan);
+		struct lttng_kernel_channel_common *chan = chan_priv->pub;
+		struct lttng_kernel_channel_buffer_private *chan_buf_priv;
+
+		if (chan->type != LTTNG_KERNEL_CHANNEL_TYPE_BUFFER)
+			continue;
+		chan_buf_priv = container_of(chan_priv, struct lttng_kernel_channel_buffer_private, parent);
+
+		if (chan_buf_priv->channel_type != METADATA_CHANNEL)
+			lib_ring_buffer_clear_quiescent_channel(chan_buf_priv->rb_chan);
 	}
 
 	WRITE_ONCE(session->active, 1);
@@ -568,7 +579,7 @@ end:
 int lttng_session_disable(struct lttng_kernel_session *session)
 {
 	int ret = 0;
-	struct lttng_kernel_channel_buffer_private *chan_priv;
+	struct lttng_kernel_channel_common_private *chan_priv;
 
 	mutex_lock(&sessions_mutex);
 	if (!session->active) {
@@ -583,8 +594,14 @@ int lttng_session_disable(struct lttng_kernel_session *session)
 
 	/* Set each stream's quiescent state. */
 	list_for_each_entry(chan_priv, &session->priv->chan, node) {
-		if (chan_priv->channel_type != METADATA_CHANNEL)
-			lib_ring_buffer_set_quiescent_channel(chan_priv->rb_chan);
+		struct lttng_kernel_channel_common *chan = chan_priv->pub;
+		struct lttng_kernel_channel_buffer_private *chan_buf_priv;
+
+		if (chan->type != LTTNG_KERNEL_CHANNEL_TYPE_BUFFER)
+			continue;
+		chan_buf_priv = container_of(chan_priv, struct lttng_kernel_channel_buffer_private, parent);
+		if (chan_buf_priv->channel_type != METADATA_CHANNEL)
+			lib_ring_buffer_set_quiescent_channel(chan_buf_priv->rb_chan);
 	}
 end:
 	mutex_unlock(&sessions_mutex);
@@ -594,7 +611,7 @@ end:
 int lttng_session_metadata_regenerate(struct lttng_kernel_session *session)
 {
 	int ret = 0;
-	struct lttng_kernel_channel_buffer_private *chan_priv;
+	struct lttng_kernel_channel_common_private *chan_priv;
 	struct lttng_kernel_event_session_common_private *event_session_common_priv;
 	struct lttng_metadata_cache *cache = session->priv->metadata_cache;
 	struct lttng_metadata_stream *stream;
@@ -617,6 +634,12 @@ int lttng_session_metadata_regenerate(struct lttng_kernel_session *session)
 
 	session->priv->metadata_dumped = 0;
 	list_for_each_entry(chan_priv, &session->priv->chan, node) {
+		struct lttng_kernel_channel_common *chan = chan_priv->pub;
+		struct lttng_kernel_channel_buffer_private *chan_buf_priv;
+
+		if (chan->type != LTTNG_KERNEL_CHANNEL_TYPE_BUFFER)
+			continue;
+		chan_buf_priv = container_of(chan_priv, struct lttng_kernel_channel_buffer_private, parent);
 		chan_priv->metadata_dumped = 0;
 	}
 
@@ -638,47 +661,55 @@ end:
 	return ret;
 }
 
-int lttng_channel_enable(struct lttng_kernel_channel_buffer *channel)
+int lttng_channel_enable(struct lttng_kernel_channel_common *channel)
 {
 	int ret = 0;
 
 	mutex_lock(&sessions_mutex);
-	if (channel->priv->channel_type == METADATA_CHANNEL) {
-		ret = -EPERM;
-		goto end;
+	if (channel->type == LTTNG_KERNEL_CHANNEL_TYPE_BUFFER) {
+		struct lttng_kernel_channel_buffer *chan_buf =
+			container_of(channel, struct lttng_kernel_channel_buffer, parent);
+		if (chan_buf->priv->channel_type == METADATA_CHANNEL) {
+			ret = -EPERM;
+			goto end;
+		}
 	}
-	if (channel->parent.enabled) {
+	if (channel->enabled) {
 		ret = -EEXIST;
 		goto end;
 	}
 	/* Set transient enabler state to "enabled" */
-	channel->priv->parent.tstate = 1;
-	lttng_session_sync_event_enablers(channel->parent.session);
+	channel->priv->tstate = 1;
+	lttng_session_sync_event_enablers(channel->session);
 	/* Set atomically the state to "enabled" */
-	WRITE_ONCE(channel->parent.enabled, 1);
+	WRITE_ONCE(channel->enabled, 1);
 end:
 	mutex_unlock(&sessions_mutex);
 	return ret;
 }
 
-int lttng_channel_disable(struct lttng_kernel_channel_buffer *channel)
+int lttng_channel_disable(struct lttng_kernel_channel_common *channel)
 {
 	int ret = 0;
 
 	mutex_lock(&sessions_mutex);
-	if (channel->priv->channel_type == METADATA_CHANNEL) {
-		ret = -EPERM;
-		goto end;
+	if (channel->type == LTTNG_KERNEL_CHANNEL_TYPE_BUFFER) {
+		struct lttng_kernel_channel_buffer *chan_buf =
+			container_of(channel, struct lttng_kernel_channel_buffer, parent);
+		if (chan_buf->priv->channel_type == METADATA_CHANNEL) {
+			ret = -EPERM;
+			goto end;
+		}
 	}
-	if (!channel->parent.enabled) {
+	if (!channel->enabled) {
 		ret = -EEXIST;
 		goto end;
 	}
 	/* Set atomically the state to "disabled" */
-	WRITE_ONCE(channel->parent.enabled, 0);
+	WRITE_ONCE(channel->enabled, 0);
 	/* Set transient enabler state to "enabled" */
-	channel->priv->parent.tstate = 0;
-	lttng_session_sync_event_enablers(channel->parent.session);
+	channel->priv->tstate = 0;
+	lttng_session_sync_event_enablers(channel->session);
 end:
 	mutex_unlock(&sessions_mutex);
 	return ret;
@@ -926,7 +957,7 @@ struct lttng_kernel_channel_buffer *lttng_channel_create(struct lttng_kernel_ses
 	chan->parent.enabled = 1;
 	chan->priv->transport = transport;
 	chan->priv->channel_type = channel_type;
-	list_add(&chan->priv->node, &session->priv->chan);
+	list_add(&chan->priv->parent.node, &session->priv->chan);
 	mutex_unlock(&sessions_mutex);
 	return chan;
 
@@ -941,19 +972,40 @@ active:
 	return NULL;
 }
 
+static
+void lttng_channel_buffer_destroy(struct lttng_kernel_channel_buffer *chan_buf)
+{
+	chan_buf->ops->priv->chan_bufnel_destroy(chan_buf->priv->rb_chan_buf);
+	module_put(chan_buf->priv->transport->owner);
+	list_del(&chan_buf->priv->node);
+	lttng_kernel_destroy_context(chan_buf->priv->ctx);
+	lttng_kernel_free_chan_bufnel_common(&chan_buf->parent);
+}
+
+static
+void lttng_channel_counter_destroy(struct lttng_kernel_channel_counter *chan_counter)
+{
+	//TODO
+}
+
 /*
  * Only used internally at session destruction for per-cpu channels, and
  * when metadata channel is released.
  * Needs to be called with sessions mutex held.
  */
 static
-void _lttng_channel_destroy(struct lttng_kernel_channel_buffer *chan)
+void _lttng_channel_destroy(struct lttng_kernel_channel_common *chan)
 {
-	chan->ops->priv->channel_destroy(chan->priv->rb_chan);
-	module_put(chan->priv->transport->owner);
-	list_del(&chan->priv->node);
-	lttng_kernel_destroy_context(chan->priv->ctx);
-	lttng_kernel_free_channel_common(&chan->parent);
+	switch (chan->type) {
+	case LTTNG_KERNEL_CHANNEL_TYPE_BUFFER:
+		lttng_channel_buffer_destroy(container_of(chan,
+					struct lttng_kernel_channel_buffer, parent);
+		break;
+	case LTTNG_KERNEL_CHANNEL_TYPE_COUNTER:
+		lttng_channel_counter_destroy(container_of(chan,
+					struct lttng_kernel_channel_buffer, parent);
+		break;
+	}
 }
 
 void lttng_metadata_channel_destroy(struct lttng_kernel_channel_buffer *chan)
