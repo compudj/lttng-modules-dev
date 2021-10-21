@@ -941,7 +941,7 @@ static inline int lttng_syscalls_unregister_event_notifier_group(
 }
 #endif
 
-#ifdef CONFIG_KPROBES
+#if 0 /* def CONFIG_KPROBES */
 int lttng_kprobes_register_event(const char *symbol_name,
 		uint64_t offset,
 		uint64_t addr,
@@ -978,7 +978,7 @@ int lttng_init_kprobes_event(const char *name, struct lttng_kernel_event_common 
 int lttng_event_add_callsite(struct lttng_kernel_event_common *event,
 	struct lttng_kernel_abi_event_callsite __user *callsite);
 
-#ifdef CONFIG_UPROBES
+#if 0 /* ifdef CONFIG_UPROBES */
 int lttng_uprobes_register_event(int fd, struct lttng_kernel_event_common *event);
 int lttng_uprobes_event_add_callsite(struct lttng_kernel_event_common *event,
 	struct lttng_kernel_abi_event_callsite __user *callsite);
@@ -1015,7 +1015,7 @@ int lttng_init_uprobes_event(const char *name, struct lttng_kernel_event_common 
 }
 #endif
 
-#ifdef CONFIG_KRETPROBES
+#if 0 /* ifdef CONFIG_KRETPROBES */
 int lttng_kretprobes_register(const char *symbol_name,
 		uint64_t offset,
 		uint64_t addr,
