@@ -87,14 +87,14 @@ lttng-wrapper-objs := wrapper/page_alloc.o \
                       wrapper/fdtable.o \
                       lttng-wrapper-impl.o
 
-ifneq ($(CONFIG_HAVE_SYSCALL_TRACEPOINTS),)
-  lttng-tracer-objs += lttng-syscalls.o
-  lttng-tracer-objs += lttng-syscalls-entry-table.o
-  lttng-tracer-objs += lttng-syscalls-entry-compat-table.o
-  lttng-tracer-objs += lttng-syscalls-exit-table.o
-  lttng-tracer-objs += lttng-syscalls-exit-compat-table.o
-  lttng-tracer-objs += lttng-syscalls-enum.o
-endif # CONFIG_HAVE_SYSCALL_TRACEPOINTS
+#ifneq ($(CONFIG_HAVE_SYSCALL_TRACEPOINTS),)
+#  lttng-tracer-objs += lttng-syscalls.o
+#  lttng-tracer-objs += lttng-syscalls-entry-table.o
+#  lttng-tracer-objs += lttng-syscalls-entry-compat-table.o
+#  lttng-tracer-objs += lttng-syscalls-exit-table.o
+#  lttng-tracer-objs += lttng-syscalls-exit-compat-table.o
+#  lttng-tracer-objs += lttng-syscalls-enum.o
+#endif # CONFIG_HAVE_SYSCALL_TRACEPOINTS
 
 ifneq ($(CONFIG_PERF_EVENTS),)
   lttng-tracer-objs += lttng-context-perf-counters.o

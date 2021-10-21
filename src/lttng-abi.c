@@ -200,7 +200,7 @@ fd_error:
 	return ret;
 }
 
-#ifndef CONFIG_HAVE_SYSCALL_TRACEPOINTS
+#if 1 /* ifndef CONFIG_HAVE_SYSCALL_TRACEPOINTS */
 static inline
 int lttng_abi_syscall_list(void)
 {
