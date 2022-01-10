@@ -876,7 +876,7 @@ bool lttng_kernel_event_id_available(struct lttng_event_enabler_common *event_en
 	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
 	{
 		struct lttng_event_recorder_enabler *event_recorder_enabler =
-			container_of(event_enabler, struct lttng_event_recorder_enabler, parent);
+			container_of(event_enabler, struct lttng_event_recorder_enabler, parent.parent);
 		struct lttng_kernel_channel_buffer *chan = event_recorder_enabler->chan;
 
 		switch (itype) {
@@ -918,7 +918,7 @@ struct lttng_kernel_event_common *lttng_kernel_event_alloc(struct lttng_event_en
 	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
 	{
 		struct lttng_event_recorder_enabler *event_recorder_enabler =
-			container_of(event_enabler, struct lttng_event_recorder_enabler, parent);
+			container_of(event_enabler, struct lttng_event_recorder_enabler, parent.parent);
 		struct lttng_kernel_event_recorder *event_recorder;
 		struct lttng_kernel_event_recorder_private *event_recorder_priv;
 		struct lttng_kernel_channel_buffer *chan = event_recorder_enabler->chan;
@@ -1942,7 +1942,7 @@ bool lttng_event_enabler_match_event(struct lttng_event_enabler_common *event_en
 	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
 	{
 		struct lttng_event_recorder_enabler *event_recorder_enabler =
-			container_of(event_enabler, struct lttng_event_recorder_enabler, parent);
+			container_of(event_enabler, struct lttng_event_recorder_enabler, parent.parent);
 		struct lttng_kernel_event_recorder *event_recorder =
 			container_of(event, struct lttng_kernel_event_recorder, parent);
 
@@ -1983,7 +1983,7 @@ bool lttng_event_enabler_desc_match_event(struct lttng_event_enabler_common *eve
 	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
 	{
 		struct lttng_event_recorder_enabler *event_recorder_enabler =
-			container_of(event_enabler, struct lttng_event_recorder_enabler, parent);
+			container_of(event_enabler, struct lttng_event_recorder_enabler, parent.parent);
 		struct lttng_kernel_event_recorder *event_recorder =
 			container_of(event, struct lttng_kernel_event_recorder, parent);
 
@@ -2023,7 +2023,7 @@ bool lttng_event_enabler_event_name_match_event(struct lttng_event_enabler_commo
 	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
 	{
 		struct lttng_event_recorder_enabler *event_recorder_enabler =
-			container_of(event_enabler, struct lttng_event_recorder_enabler, parent);
+			container_of(event_enabler, struct lttng_event_recorder_enabler, parent.parent);
 		struct lttng_kernel_event_recorder *event_recorder =
 			container_of(event, struct lttng_kernel_event_recorder, parent);
 
@@ -2278,14 +2278,16 @@ struct lttng_event_recorder_enabler *lttng_event_recorder_enabler_create(
 	event_enabler = kzalloc(sizeof(*event_enabler), GFP_KERNEL);
 	if (!event_enabler)
 		return NULL;
-	event_enabler->parent.enabler_type = LTTNG_EVENT_ENABLER_TYPE_RECORDER;
-	event_enabler->parent.format_type = format_type;
-	INIT_LIST_HEAD(&event_enabler->parent.filter_bytecode_head);
-	memcpy(&event_enabler->parent.event_param, event_param,
-		sizeof(event_enabler->parent.event_param));
+	event_enabler->parent.parent.enabler_type = LTTNG_EVENT_ENABLER_TYPE_RECORDER;
+	event_enabler->parent.parent.format_type = format_type;
+	INIT_LIST_HEAD(&event_enabler->parent.parent.filter_bytecode_head);
+	memcpy(&event_enabler->parent.parent.event_param, event_param,
+		sizeof(event_enabler->parent.parent.event_param));
 	event_enabler->chan = chan;
+	event_enabler->parent.chan = &chan->parent;
+
 	/* ctx left NULL */
-	event_enabler->parent.enabled = 0;
+	event_enabler->parent.parent.enabled = 0;
 	return event_enabler;
 }
 
@@ -2293,8 +2295,8 @@ void lttng_event_enabler_session_add(struct lttng_kernel_session *session,
 		struct lttng_event_recorder_enabler *event_enabler)
 {
 	mutex_lock(&sessions_mutex);
-	list_add(&event_enabler->parent.node, &session->priv->enablers_head);
-	event_enabler->parent.published = true;
+	list_add(&event_enabler->parent.parent.node, &session->priv->enablers_head);
+	event_enabler->parent.parent.published = true;
 	lttng_session_lazy_sync_event_enablers(session);
 	mutex_unlock(&sessions_mutex);
 }
@@ -2398,7 +2400,7 @@ void lttng_event_enabler_destroy(struct lttng_event_enabler_common *event_enable
 	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
 	{
 		struct lttng_event_recorder_enabler *event_recorder_enabler =
-			container_of(event_enabler, struct lttng_event_recorder_enabler, parent);
+			container_of(event_enabler, struct lttng_event_recorder_enabler, parent.parent);
 
 		kfree(event_recorder_enabler);
 		break;
@@ -2708,7 +2710,7 @@ void lttng_event_enabler_sync(struct lttng_event_enabler_common *event_enabler)
 	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
 	{
 		struct lttng_event_recorder_enabler *event_recorder_enabler =
-			container_of(event_enabler, struct lttng_event_recorder_enabler, parent);
+			container_of(event_enabler, struct lttng_event_recorder_enabler, parent.parent);
 		lttng_session_lazy_sync_event_enablers(event_recorder_enabler->chan->parent.session);
 		break;
 	}

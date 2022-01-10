@@ -274,8 +274,13 @@ struct lttng_event_enabler_common {
 	bool published;			/* published in list. */
 };
 
-struct lttng_event_recorder_enabler {
+struct lttng_event_enabler_session_common {
 	struct lttng_event_enabler_common parent;
+	struct lttng_kernel_channel_common *chan;
+};
+
+struct lttng_event_recorder_enabler {
+	struct lttng_event_enabler_session_common parent;
 	struct lttng_kernel_channel_buffer *chan;
 };
 
@@ -612,13 +617,6 @@ int lttng_kernel_interpret_event_filter(const struct lttng_kernel_event_common *
 		void *event_filter_ctx);
 
 static inline
-struct lttng_event_enabler_common *lttng_event_recorder_enabler_as_enabler(
-		struct lttng_event_recorder_enabler *event_recorder_enabler)
-{
-	return &event_recorder_enabler->parent;
-}
-
-static inline
 struct lttng_event_enabler_common *lttng_event_notifier_enabler_as_enabler(
 		struct lttng_event_notifier_enabler *event_notifier_enabler)
 {
@@ -632,7 +630,7 @@ struct lttng_event_ht *lttng_get_event_ht_from_enabler(struct lttng_event_enable
 	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
 	{
 		struct lttng_event_recorder_enabler *event_recorder_enabler =
-			container_of(event_enabler, struct lttng_event_recorder_enabler, parent);
+			container_of(event_enabler, struct lttng_event_recorder_enabler, parent.parent);
 		return &event_recorder_enabler->chan->parent.session->priv->events_ht;
 	}
 	case LTTNG_EVENT_ENABLER_TYPE_NOTIFIER:
@@ -653,7 +651,7 @@ struct list_head *lttng_get_event_list_head_from_enabler(struct lttng_event_enab
 	case LTTNG_EVENT_ENABLER_TYPE_RECORDER:
 	{
 		struct lttng_event_recorder_enabler *event_recorder_enabler =
-			container_of(event_enabler, struct lttng_event_recorder_enabler, parent);
+			container_of(event_enabler, struct lttng_event_recorder_enabler, parent.parent);
 		return &event_recorder_enabler->chan->parent.session->priv->events;
 	}
 	case LTTNG_EVENT_ENABLER_TYPE_NOTIFIER:
