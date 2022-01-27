@@ -519,7 +519,7 @@ struct lttng_kernel_session_private {
 
 	struct lttng_event_ht events_ht;	/* Hash table of events */
 
-	struct list_head list;			/* Session list */
+	struct list_head node;			/* Session list */
 	unsigned int free_chan_id;		/* Next chan ID to allocate */
 	uuid_le uuid;				/* Trace session unique ID */
 	struct lttng_metadata_cache *metadata_cache;
