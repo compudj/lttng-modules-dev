@@ -15,6 +15,8 @@
 #include <ringbuffer/frontend_types.h>
 #include <wrapper/vmalloc.h>
 #include <wrapper/irqflags.h>
+#include <wrapper/rcu.h>
+#include <wrapper/user_namespace.h>
 #include <lttng/tracer.h>
 #include <blacklist/kprobes.h>
 
@@ -24,34 +26,44 @@ int lttng_kprobes_event_handler_pre(struct kprobe *p, struct pt_regs *regs)
 	struct lttng_kernel_event_common_private *event_priv =
 		container_of(p, struct lttng_kernel_event_common_private, u.kprobe.kp);
 	struct lttng_kernel_event_common *event = event_priv->pub;
+	struct lttng_kernel_channel_common *chan_common;
 	struct lttng_kernel_probe_ctx lttng_probe_ctx = {
 		.event = event,
 		.interruptible = !lttng_regs_irqs_disabled(regs),
 	};
 	unsigned long data = (unsigned long) p->addr;
 
-	switch (event->type) {
-	case LTTNG_KERNEL_EVENT_TYPE_RECORDER:
-	{
-		struct lttng_kernel_event_recorder *event_recorder =
-			container_of(event, struct lttng_kernel_event_recorder, parent);
-		struct lttng_kernel_channel_buffer *chan = event_recorder->chan;
-
-		if (unlikely(!LTTNG_READ_ONCE(chan->parent.session->active)))
-			return 0;
-		if (unlikely(!LTTNG_READ_ONCE(chan->parent.enabled)))
-			return 0;
-		break;
-	}
-	case LTTNG_KERNEL_EVENT_TYPE_NOTIFIER:
-		break;
-	default:
-		WARN_ON_ONCE(1);
-	}
-
 	if (unlikely(!LTTNG_READ_ONCE(event->enabled)))
-		return 0;
+		goto end;
 
+	chan_common = lttng_kernel_get_chan_common_from_event_common(event);
+	if (chan_common) {
+		struct lttng_kernel_session *session = chan_common->session;
+		struct lttng_kernel_id_tracker_rcu *lf;
+
+		if (unlikely(!LTTNG_READ_ONCE(session->active)))
+			goto end;
+		if (unlikely(!LTTNG_READ_ONCE(chan_common->enabled)))
+			goto end;
+		lf = lttng_rcu_dereference(session->pid_tracker.p);
+		if (lf && likely(!lttng_id_tracker_lookup(lf, current->tgid)))
+			goto end;
+		lf = lttng_rcu_dereference(session->vpid_tracker.p);
+		if (lf && likely(!lttng_id_tracker_lookup(lf, task_tgid_vnr(current))))
+			goto end;
+		lf = lttng_rcu_dereference(session->uid_tracker.p);
+		if (lf && likely(!lttng_id_tracker_lookup(lf, lttng_current_uid())))
+			goto end;
+		lf = lttng_rcu_dereference(session->vuid_tracker.p);
+		if (lf && likely(!lttng_id_tracker_lookup(lf, lttng_current_vuid())))
+			goto end;
+		lf = lttng_rcu_dereference(session->gid_tracker.p);
+		if (lf && likely(!lttng_id_tracker_lookup(lf, lttng_current_gid())))
+			goto end;
+		lf = lttng_rcu_dereference(session->vgid_tracker.p);
+		if (lf && likely(!lttng_id_tracker_lookup(lf, lttng_current_vgid())))
+			goto end;
+	}
 	switch (event->type) {
 	case LTTNG_KERNEL_EVENT_TYPE_RECORDER:
 	{
@@ -80,9 +92,18 @@ int lttng_kprobes_event_handler_pre(struct kprobe *p, struct pt_regs *regs)
 		event_notifier->notification_send(event_notifier, NULL, NULL, &notif_ctx);
 		break;
 	}
+	case LTTNG_KERNEL_EVENT_TYPE_COUNTER:
+	{
+		struct lttng_kernel_event_counter *event_counter =
+			container_of(event, struct lttng_kernel_event_counter, parent);
+
+		(void) event_counter->chan->ops->event_counter_add(event_counter, 1);
+		break;
+	}
 	default:
 		WARN_ON_ONCE(1);
 	}
+end:
 	return 0;
 }
 
