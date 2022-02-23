@@ -780,7 +780,6 @@ struct lttng_kernel_channel_buffer *lttng_channel_buffer_create(struct lttng_ker
 				       enum channel_type channel_type)
 {
 	struct lttng_kernel_channel_buffer *chan;
-	struct lttng_kernel_channel_buffer_private *chan_priv;
 	struct lttng_transport *transport = NULL;
 
 	mutex_lock(&sessions_mutex);
@@ -797,15 +796,8 @@ struct lttng_kernel_channel_buffer *lttng_channel_buffer_create(struct lttng_ker
 		goto notransport;
 	}
 	chan = lttng_kernel_alloc_channel_buffer();
-	chan = kzalloc(sizeof(struct lttng_kernel_channel_buffer), GFP_KERNEL);
 	if (!chan)
 		goto nomem;
-	chan_priv = kzalloc(sizeof(struct lttng_kernel_channel_buffer_private), GFP_KERNEL);
-	if (!chan_priv)
-		goto nomem_priv;
-	chan->priv = chan_priv;
-	chan_priv->pub = chan;
-	chan->parent.type = LTTNG_KERNEL_CHANNEL_TYPE_BUFFER;
 	chan->parent.session = session;
 	chan->priv->id = session->priv->free_chan_id++;
 	chan->ops = &transport->ops;
@@ -828,9 +820,7 @@ struct lttng_kernel_channel_buffer *lttng_channel_buffer_create(struct lttng_ker
 	return chan;
 
 create_error:
-	kfree(chan_priv);
-nomem_priv:
-	kfree(chan);
+	lttng_kernel_free_channel_common(&chan->parent);
 nomem:
 	if (transport)
 		module_put(transport->owner);
