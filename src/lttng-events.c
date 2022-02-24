@@ -1092,6 +1092,7 @@ struct lttng_kernel_event_common *lttng_kernel_event_alloc(struct lttng_event_en
 		if (!chan->priv->parent.coalesce_hits)
 			event_counter->priv->parent.parent.user_token = event_counter_enabler->parent.parent.user_token;
 		strcpy(event_counter_priv->key, key_string);
+		event_counter->priv->parent.id = chan->priv->free_index++;
 		return &event_counter->parent;
 	}
 	default:
