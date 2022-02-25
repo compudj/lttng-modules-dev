@@ -2139,10 +2139,10 @@ int lttng_abi_create_event_counter_enabler(struct file *channel_file,
 			 * we create the special star globbing enabler.
 			 */
 			event_enabler = lttng_event_counter_enabler_create(LTTNG_ENABLER_FORMAT_STAR_GLOB,
-				event_param, key_param, channel);
+				event_param, key_param, NULL, channel);
 		} else {
 			event_enabler = lttng_event_counter_enabler_create(LTTNG_ENABLER_FORMAT_NAME,
-				event_param, key_param, channel);
+				event_param, key_param, NULL, channel);
 		}
 		if (event_enabler)
 			lttng_event_enabler_session_add(channel->parent.session, &event_enabler->parent);
@@ -2160,7 +2160,7 @@ int lttng_abi_create_event_counter_enabler(struct file *channel_file,
 		struct lttng_event_counter_enabler *event_enabler;
 
 		event_enabler = lttng_event_counter_enabler_create(LTTNG_ENABLER_FORMAT_NAME,
-				event_param, key_param, channel);
+				event_param, key_param, NULL, channel);
 		if (!event_enabler) {
 			ret = -ENOMEM;
 			goto event_error;

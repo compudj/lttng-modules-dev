@@ -1255,7 +1255,8 @@ bool lttng_event_enabler_event_name_key_match_event(struct lttng_event_enabler_c
 struct lttng_event_counter_enabler *lttng_event_counter_enabler_create(
 		enum lttng_enabler_format_type format_type,
 		struct lttng_kernel_abi_event *event_param,
-		const struct lttng_kernel_abi_counter_key *key,
+		const struct lttng_kernel_abi_counter_key *abi_key,
+		const struct lttng_counter_key *kernel_key,
 		struct lttng_kernel_channel_counter *chan);
 
 #define lttng_kernel_static_ctx_field(_event_field, _get_size, _record, _get_value, _destroy, _priv)	\

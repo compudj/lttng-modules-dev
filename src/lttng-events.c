@@ -1573,10 +1573,7 @@ struct lttng_kernel_event_common *_lttng_kernel_event_create(struct lttng_event_
 	}
 
 	case LTTNG_KERNEL_ABI_SYSCALL:
-		/*
-		 * Needs to be explicitly enabled after creation, since
-		 * we may want to apply filters.
-		 */
+		/* Event will be enabled by enabler sync. */
 		event->enabled = 0;
 		event->priv->registered = 0;
 		event->priv->desc = event_desc;
@@ -2566,7 +2563,7 @@ int lttng_fix_pending_event_notifiers(void)
 }
 
 static
-int copy_counter_key(struct lttng_counter_key *key,
+int copy_abi_counter_key(struct lttng_counter_key *key,
 		     const struct lttng_kernel_abi_counter_key *key_param)
 {
 	size_t i, j, nr_dimensions;
@@ -2647,7 +2644,8 @@ struct lttng_event_recorder_enabler *lttng_event_recorder_enabler_create(
 struct lttng_event_counter_enabler *lttng_event_counter_enabler_create(
 		enum lttng_enabler_format_type format_type,
 		struct lttng_kernel_abi_event *event_param,
-		const struct lttng_kernel_abi_counter_key *key,
+		const struct lttng_kernel_abi_counter_key *abi_key,
+		const struct lttng_counter_key *kernel_key,
 		struct lttng_kernel_channel_counter *chan)
 {
 	struct lttng_event_counter_enabler *event_enabler;
@@ -2662,11 +2660,13 @@ struct lttng_event_counter_enabler *lttng_event_counter_enabler_create(
 		sizeof(event_enabler->parent.parent.event_param));
 	event_enabler->chan = chan;
 	event_enabler->parent.chan = &chan->parent;
-	if (key) {
-		if (copy_counter_key(&event_enabler->key, key)) {
+	if (abi_key) {
+		if (copy_abi_counter_key(&event_enabler->key, abi_key)) {
 			kfree(event_enabler);
 			return NULL;
 		}
+	} else {
+		memcpy(&event_enabler->key, kernel_key, sizeof(*kernel_key));
 	}
 
 	/* ctx left NULL */
