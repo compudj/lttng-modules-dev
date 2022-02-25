@@ -109,7 +109,10 @@ int lttng_uprobes_event_handler_pre(struct uprobe_consumer *uc, struct pt_regs *
 		struct lttng_kernel_event_counter *event_counter =
 			container_of(event, struct lttng_kernel_event_counter, parent);
 
+		/* uprobes is invoked with preemption enabled. */
+		rcu_read_lock_sched_notrace();
 		(void) event_counter->chan->ops->event_counter_add(event_counter, 1);
+		rcu_read_unlock_sched_notrace();
 		break;
 	}
 	default:
