@@ -680,14 +680,7 @@ int lttng_event_enable(struct lttng_kernel_event_common *event)
 		break;
 	}
 	case LTTNG_KERNEL_EVENT_TYPE_NOTIFIER:
-		switch (event->priv->instrumentation) {
-		case LTTNG_KERNEL_ABI_KRETPROBE:
-			ret = -EINVAL;
-			goto end;
-		default:
-			break;
-		}
-		break;
+		lttng_fallthrough;
 	case LTTNG_KERNEL_EVENT_TYPE_COUNTER:
 		break;
 	default:
@@ -746,14 +739,7 @@ int lttng_event_disable(struct lttng_kernel_event_common *event)
 		break;
 	}
 	case LTTNG_KERNEL_EVENT_TYPE_NOTIFIER:
-		switch (event->priv->instrumentation) {
-		case LTTNG_KERNEL_ABI_KRETPROBE:
-			ret = -EINVAL;
-			goto end;
-		default:
-			break;
-		}
-		break;
+		lttng_fallthrough;
 	case LTTNG_KERNEL_EVENT_TYPE_COUNTER:
 		break;
 	default:
@@ -1774,11 +1760,11 @@ void unregister_event(struct lttng_kernel_event_common *event)
 		case LTTNG_KERNEL_EVENT_TYPE_RECORDER:
 			lttng_fallthrough;
 		case LTTNG_KERNEL_EVENT_TYPE_COUNTER:
+			lttng_fallthrough;
+		case LTTNG_KERNEL_EVENT_TYPE_NOTIFIER:
 			lttng_kretprobes_unregister(event);
 			ret = 0;
 			break;
-		case LTTNG_KERNEL_EVENT_TYPE_NOTIFIER:
-			WARN_ON_ONCE(1);
 			break;
 		}
 		break;
