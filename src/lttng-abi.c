@@ -2023,7 +2023,6 @@ int lttng_abi_create_event_recorder_enabler(struct file *channel_file,
 		 * will stay invariant for the rest of the session.
 		 */
 		event = lttng_kernel_event_create(&event_enabler->parent.parent, NULL, NULL);
-		WARN_ON_ONCE(IS_ERR(event));
 		lttng_event_enabler_destroy(&event_enabler->parent.parent);
 		if (IS_ERR(event)) {
 			ret = PTR_ERR(event);
@@ -2057,7 +2056,6 @@ int lttng_abi_create_event_recorder_enabler(struct file *channel_file,
 		 * will stay invariant for the rest of the session.
 		 */
 		event[0] = lttng_kernel_event_create(&event_enabler->parent.parent, NULL, &event_pair);
-		WARN_ON_ONCE(IS_ERR(event[0]));
 		if (IS_ERR(event[0])) {
 			lttng_event_enabler_destroy(&event_enabler->parent.parent);
 			ret = PTR_ERR(event[0]);
@@ -2067,8 +2065,6 @@ int lttng_abi_create_event_recorder_enabler(struct file *channel_file,
 		strcpy(event_pair.name, event_param->name);
 		strcat(event_pair.name, "_exit");
 		event[1] = lttng_kernel_event_create(&event_enabler->parent.parent, NULL, &event_pair);
-		WARN_ON_ONCE(IS_ERR(event[1]));
-
 		lttng_event_enabler_destroy(&event_enabler->parent.parent);
 		if (IS_ERR(event[1])) {
 			ret = PTR_ERR(event[1]);
@@ -2211,7 +2207,6 @@ int lttng_abi_create_event_counter_enabler(struct file *channel_file,
 		 * will stay invariant for the rest of the session.
 		 */
 		event = lttng_kernel_event_create(&event_enabler->parent.parent, NULL, NULL);
-		WARN_ON_ONCE(IS_ERR(event));
 		lttng_event_enabler_destroy(&event_enabler->parent.parent);
 		if (IS_ERR(event)) {
 			ret = PTR_ERR(event);
@@ -2245,7 +2240,6 @@ int lttng_abi_create_event_counter_enabler(struct file *channel_file,
 		 * will stay invariant for the rest of the session.
 		 */
 		event[0] = lttng_kernel_event_create(&event_enabler->parent.parent, NULL, &event_pair);
-		WARN_ON_ONCE(IS_ERR(event[0]));
 		if (IS_ERR(event[0])) {
 			lttng_event_enabler_destroy(&event_enabler->parent.parent);
 			ret = PTR_ERR(event[0]);
@@ -2255,8 +2249,6 @@ int lttng_abi_create_event_counter_enabler(struct file *channel_file,
 		strcpy(event_pair.name, event_param->name);
 		strcat(event_pair.name, "_exit");
 		event[1] = lttng_kernel_event_create(&event_enabler->parent.parent, NULL, &event_pair);
-		WARN_ON_ONCE(IS_ERR(event[1]));
-
 		lttng_event_enabler_destroy(&event_enabler->parent.parent);
 		if (IS_ERR(event[1])) {
 			ret = PTR_ERR(event[1]);
@@ -2506,7 +2498,6 @@ int lttng_abi_create_event_notifier(struct file *event_notifier_group_file,
 			goto event_notifier_error;
 		}
 		event = lttng_kernel_event_create(&event_notifier_enabler->parent, NULL, NULL);
-		WARN_ON_ONCE(IS_ERR(event));
 		lttng_event_enabler_destroy(&event_notifier_enabler->parent);
 		if (IS_ERR(event)) {
 			ret = PTR_ERR(event);
