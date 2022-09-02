@@ -2428,6 +2428,7 @@ int lttng_abi_validate_event_param(struct lttng_kernel_abi_event *event_param,
 		default:
 			return -EINVAL;
 		}
+		break;
 
 	case LTTNG_KERNEL_ABI_KRETPROBE:
 		switch (event_param->u.kretprobe.entryexit) {
