@@ -1342,7 +1342,7 @@ void register_event(struct lttng_kernel_event_common *event)
 	case LTTNG_KERNEL_ABI_TRACEPOINT:
 		ret = lttng_tracepoint_probe_register(desc->event_kname,
 						  desc->tp_class->probe_callback,
-						  event);
+						  event, 0);
 		break;
 
 	case LTTNG_KERNEL_ABI_SYSCALL:

@@ -160,7 +160,7 @@ void remove_tracepoint(struct tracepoint_entry *e)
 	kfree(e);
 }
 
-int lttng_tracepoint_probe_register(const char *name, void *probe, void *data)
+int lttng_tracepoint_probe_register(const char *name, void *probe, void *data, unsigned int flags)
 {
 	struct tracepoint_entry *e;
 	int ret = 0;
@@ -180,7 +180,8 @@ int lttng_tracepoint_probe_register(const char *name, void *probe, void *data)
 		goto end;
 	e->refcount++;
 	if (e->tp) {
-		ret = tracepoint_probe_register(e->tp, probe, data);
+		ret = tracepoint_probe_register_prio_flags(e->tp, probe, data,
+					TRACEPOINT_DEFAULT_PRIO, flags);
 		WARN_ON_ONCE(ret);
 		ret = 0;
 	}

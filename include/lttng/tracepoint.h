@@ -10,7 +10,13 @@
 #ifndef _LTTNG_TRACEPOINT_H
 #define _LTTNG_TRACEPOINT_H
 
-int lttng_tracepoint_probe_register(const char *name, void *probe, void *data);
+#if 1	//TODO use kernel version.
+#define	LTTNG_TRACEPOINT_MAY_FAULT	TRACEPOINT_MAY_FAULT
+#else
+#define	LTTNG_TRACEPOINT_MAY_FAULT	0
+#endif
+
+int lttng_tracepoint_probe_register(const char *name, void *probe, void *data, unsigned int flags);
 int lttng_tracepoint_probe_unregister(const char *name, void *probe, void *data);
 int lttng_tracepoint_init(void);
 void lttng_tracepoint_exit(void);

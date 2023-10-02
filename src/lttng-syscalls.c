@@ -817,14 +817,16 @@ int lttng_event_enabler_create_syscall_events_if_missing(struct lttng_event_enab
 
 	if (!syscall_table->sys_enter_registered) {
 		ret = lttng_tracepoint_probe_register("sys_enter",
-				(void *) syscall_entry_event_probe, syscall_table);
+				(void *) syscall_entry_event_probe, syscall_table,
+				LTTNG_TRACEPOINT_MAY_FAULT);
 		if (ret)
 			return ret;
 		syscall_table->sys_enter_registered = 1;
 	}
 	if (!syscall_table->sys_exit_registered) {
 		ret = lttng_tracepoint_probe_register("sys_exit",
-				(void *) syscall_exit_event_probe, syscall_table);
+				(void *) syscall_exit_event_probe, syscall_table,
+				LTTNG_TRACEPOINT_MAY_FAULT);
 		if (ret) {
 			WARN_ON_ONCE(lttng_tracepoint_probe_unregister("sys_enter",
 				(void *) syscall_entry_event_probe, syscall_table));
