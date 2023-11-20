@@ -7,6 +7,7 @@
 
 #include <linux/slab.h>
 #include <linux/percpu.h>
+#include <linux/spinlock.h>
 
 #include <lttng/tp-mempool.h>
 
@@ -16,13 +17,9 @@ struct lttng_tp_buf_entry {
 	struct list_head list;
 };
 
-/*
- * No exclusive access strategy for now, this memory pool is currently only
- * used from a non-preemptible context, and the interrupt tracepoint probes do
- * not use this facility.
- */
 struct per_cpu_buf {
 	struct list_head free_list; /* Free struct lttng_tp_buf_entry. */
+	spinlock_t lock;
 };
 
 static struct per_cpu_buf __percpu *pool; /* Per-cpu buffer. */
@@ -48,6 +45,7 @@ int lttng_tp_mempool_init(void)
 		struct per_cpu_buf *cpu_buf = per_cpu_ptr(pool, cpu);
 
 		INIT_LIST_HEAD(&cpu_buf->free_list);
+		spin_lock_init(&cpu_buf->lock);
 	}
 
 	for_each_possible_cpu(cpu) {
@@ -109,6 +107,7 @@ void *lttng_tp_mempool_alloc(size_t size)
 	struct lttng_tp_buf_entry *entry;
 	struct per_cpu_buf *cpu_buf;
 	int cpu = smp_processor_id();
+	unsigned long flags;
 
 	if (size > LTTNG_TP_MEMPOOL_BUF_SIZE) {
 		ret = NULL;
@@ -116,9 +115,11 @@ void *lttng_tp_mempool_alloc(size_t size)
 	}
 
 	cpu_buf = per_cpu_ptr(pool, cpu);
+
+	spin_lock_irqsave(&cpu_buf->lock, flags);
 	if (list_empty(&cpu_buf->free_list)) {
 		ret = NULL;
-		goto end;
+		goto end_unlock;
 	}
 
 	entry = list_first_entry(&cpu_buf->free_list, struct lttng_tp_buf_entry, list);
@@ -129,6 +130,8 @@ void *lttng_tp_mempool_alloc(size_t size)
 
 	ret = (void *) entry->buf;
 
+end_unlock:
+	spin_unlock_irqrestore(&cpu_buf->lock, flags);
 end:
 	return ret;
 }
@@ -137,6 +140,7 @@ void lttng_tp_mempool_free(void *ptr)
 {
 	struct lttng_tp_buf_entry *entry;
 	struct per_cpu_buf *cpu_buf;
+	unsigned long flags;
 
 	if (!ptr)
 		goto end;
@@ -144,8 +148,11 @@ void lttng_tp_mempool_free(void *ptr)
 	cpu_buf = per_cpu_ptr(pool, entry->cpu);
 	if (!cpu_buf)
 		goto end;
+
+	spin_lock_irqsave(&cpu_buf->lock, flags);
 	/* Add it to the free list. */
 	list_add_tail(&entry->list, &cpu_buf->free_list);
+	spin_unlock_irqrestore(&cpu_buf->lock, flags);
 
 end:
 	return;
