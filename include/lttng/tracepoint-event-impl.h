@@ -1229,11 +1229,11 @@ static void __event_probe__##_name(_data_proto)						\
 		return;									\
 	__orig_dynamic_len_offset = this_cpu_ptr(&lttng_dynamic_len_stack)->offset;	\
 	__dynamic_len_idx = __orig_dynamic_len_offset;					\
+	_code_pre									\
 	if ((_tp_flags) & TRACEPOINT_MAY_FAULT) {					\
 		might_fault();								\
 		preempt_disable_notrace();						\
 	}										\
-	_code_pre									\
 	if (unlikely(READ_ONCE(__event->eval_filter))) {				\
 		__event_prepare_interpreter_stack__##_name(__stackvar.__interpreter_stack_data, \
 				_locvar_args);						\
@@ -1290,11 +1290,11 @@ static void __event_probe__##_name(_data_proto)						\
 		WARN_ON_ONCE(1);							\
 	}										\
 __post:											\
-	_code_post									\
 	barrier();	/* use before un-reserve. */					\
 	this_cpu_ptr(&lttng_dynamic_len_stack)->offset = __orig_dynamic_len_offset;	\
 	if ((_tp_flags) & TRACEPOINT_MAY_FAULT)						\
 		preempt_enable_notrace();						\
+	_code_post									\
 	return;										\
 }
 
