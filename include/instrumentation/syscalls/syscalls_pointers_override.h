@@ -1083,15 +1083,46 @@ SC_LTTNG_TRACEPOINT_ENUM(lttng_file_mode,
 
 #define OVERRIDE_32_openat
 #define OVERRIDE_64_openat
-SC_LTTNG_TRACEPOINT_EVENT(openat,
+
+SC_LTTNG_TRACEPOINT_EVENT_CODE(openat,
 	TP_PROTO(sc_exit(long ret,) int dfd, const char * filename, int flags, umode_t mode),
 	TP_ARGS(sc_exit(ret,) dfd, filename, flags, mode),
+	TP_locvar(
+		sc_in(
+			char *filename;
+			char *filename_alloc;
+			bool error, fault;
+		)
+	),
+	TP_code_pre(
+		sc_in(
+			tp_locvar->error = false;
+			tp_locvar->fault = false;
+			tp_locvar->filename_alloc = lttng_tp_mempool_alloc(PATH_MAX);
+			if (!tp_locvar->filename_alloc) {
+				tp_locvar->filename = "";
+				tp_locvar->error = true;
+			} else {
+				tp_locvar->filename = tp_locvar->filename_alloc;
+				if (strncpy_from_user(tp_locvar->filename, filename, PATH_MAX) < 0) {
+					tp_locvar->fault = true;
+				}
+			}
+		)
+	),
 	TP_FIELDS(
 		sc_exit(ctf_integer(long, ret, ret))
 		sc_in(ctf_integer(int, dfd, dfd))
-		sc_in(ctf_user_string(filename, filename))
+		sc_in(ctf_string(filename, tp_locvar->filename))
+		sc_in(ctf_integer(int, filename_fault, tp_locvar->fault))
+		sc_in(ctf_integer(int, filename_error, tp_locvar->error))
 		sc_in(ctf_enum(lttng_file_status_flags, int, flags, flags))
 		sc_in(ctf_enum(lttng_file_mode, umode_t, mode, mode))
+	),
+	TP_code_post(
+		sc_in(
+			lttng_tp_mempool_free(tp_locvar->filename_alloc);
+		)
 	)
 )
 
